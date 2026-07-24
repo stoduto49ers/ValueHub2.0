@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Value HUB 2.0</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <div class="brand">
+    <h1>VALUE<span>HUB</span> 2.0</h1>
+    <span class="paper-badge" id="paperBadge">PAPER</span>
+  </div>
+  <div class="status" id="statusBar">
+    <span class="dot" id="statusDot"></span>
+    <span id="statusText">conectando…</span>
+  </div>
+</header>
+
+<nav class="tabs">
+  <button class="tab active" data-tab="value">⚽ Value Bets</button>
+  <button class="tab" data-tab="props">🎯 Value Props</button>
+  <button class="tab" data-tab="sharp">📡 Sharp</button>
+  <button class="tab" data-tab="sharpprops">📡 Sharp Props</button>
+  <button class="tab" data-tab="boosts">🚀 Aumentadas</button>
+  <button class="tab" data-tab="bets">📒 Apostas</button>
+  <button class="tab" data-tab="other">· Outros</button>
+</nav>
+
+<div class="filters" id="filtersBar">
+  <label>Edge mín. <input type="number" id="fMinEdge" value="2.8" step="0.5" min="2.8" style="width:60px"> %</label>
+  <label>Limite mín. €<input type="number" id="fMinLimit" value="0" step="50" min="0" style="width:70px"
+    title="esconde mercados de liquidez baixa (ex.: 100 remove os alertas de €50)"></label>
+  <label>Esporte
+    <select id="fSport">
+      <option value="">todos</option>
+      <option>Football</option><option>Basketball</option>
+      <option>American Football</option><option>Ice Hockey</option>
+      <option>Baseball</option><option>Tennis</option>
+    </select>
+  </label>
+  <label><input type="search" id="fSearch" placeholder="buscar evento / liga / jogador"></label>
+  <label class="chk"><input type="checkbox" id="fSuspicious"> incluir suspeitas (&gt;20%)</label>
+  <label class="chk"><input type="checkbox" id="fSound"> 🔔 som</label>
+  <span class="count" id="oppCount"></span>
+</div>
+
+<main>
+  <section id="pane-opps">
+    <table id="oppTable">
+      <thead><tr>
+        <th>Início</th><th>Evento</th><th>Mercado</th><th>Casa</th>
+        <th>Odd</th><th>Fair</th><th>Edge</th><th>Limite</th><th>Stake</th><th></th>
+      </tr></thead>
+      <tbody id="oppBody"></tbody>
+    </table>
+    <p class="empty" id="oppEmpty" hidden>Nenhuma oportunidade no momento com esses filtros.</p>
+    <div class="card" id="nearCard" hidden>
+      <h2>Melhores linhas do momento <small class="ev-sub">(abaixo do corte — não são apostas)</small></h2>
+      <p class="hint">O scanner está funcionando: estas são as linhas mais próximas de virar valor.
+        Value bets são raras por natureza — a odd da casa precisa superar a fair odds da Pinnacle.</p>
+      <table>
+        <thead><tr><th>Início</th><th>Evento</th><th>Mercado</th><th>Casa</th>
+          <th>Odd</th><th>Fair</th><th>Edge</th><th>Corte</th></tr></thead>
+        <tbody id="nearBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="pane-boosts" hidden>
+    <div class="boost-grid">
+      <div class="card">
+        <h2>Calculadora de Boost — Simples</h2>
+        <p class="hint">Odd turbinada vs. mercado de 2 vias na casa de referência (de-vig Shin).</p>
+        <div class="form-row">
+          <label>Odd turbinada <input type="number" id="bsBoost" step="0.01" placeholder="2.50"></label>
+          <label>Ref: lado apostado <input type="number" id="bsSide" step="0.01" placeholder="2.20"></label>
+          <label>Ref: lado oposto <input type="number" id="bsOpp" step="0.01" placeholder="1.72"></label>
+          <button id="bsCalc">Calcular</button>
+        </div>
+        <div class="boost-result" id="bsResult"></div>
+      </div>
+      <div class="card">
+        <h2>Calculadora de Boost — Combinada</h2>
+        <p class="hint">Uma linha por perna: <code>oddLado,oddOposto</code> — ou só a odd da mesma múltipla noutra casa.</p>
+        <div class="form-row">
+          <label>Odd turbinada <input type="number" id="bcBoost" step="0.01" placeholder="3.96"></label>
+          <label>Pernas <textarea id="bcLegs" rows="3" placeholder="1.85,2.00&#10;1.60,2.35"></textarea></label>
+          <label>ou odd da múltipla na ref <input type="number" id="bcRef" step="0.01" placeholder="3.40"></label>
+          <button id="bcCalc">Calcular</button>
+        </div>
+        <div class="boost-result" id="bcResult"></div>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Boosts capturados pela extensão</h2>
+      <table id="boostTable">
+        <thead><tr><th>Capturado</th><th>Fonte</th><th>Título</th><th>Odd antiga</th><th>Odd nova</th><th>Δ%</th></tr></thead>
+        <tbody id="boostBody"></tbody>
+      </table>
+      <p class="empty" id="boostEmpty" hidden>Nada capturado ainda — navegue na Betano/Bet365 com a extensão ativa.</p>
+    </div>
+  </section>
+
+  <section id="pane-sharp" hidden>
+    <div class="cards" id="sharpCards"></div>
+    <div class="filters" style="padding-left:0;padding-right:0">
+      <label>Esporte
+        <select id="sSport"><option value="">todos</option>
+          <option>Soccer</option><option>Basketball</option></select>
+      </label>
+      <label>Mercado
+        <select id="sMarket"><option value="">todos</option>
+          <option>ML</option><option>Spread</option><option>Totals</option>
+          <option>ML HT</option><option>Spread HT</option><option>Totals HT</option>
+          <option>Corners Totals</option><option>Corners Spread</option>
+          <option>Corners Totals HT</option><option>Corners Spread HT</option></select>
+      </label>
+      <label><input type="search" id="sSearch" placeholder="buscar time / liga"></label>
+      <span class="count" id="sharpCount"></span>
+    </div>
+    <p class="hint">Estas são as <b>fair odds calculadas por nós</b>: linha crua da Pinnacle
+      com o vig removido (método Shin). É a referência que substitui o consenso pago —
+      contra ela mediremos o valor das casas-alvo.</p>
+    <table id="sharpTable">
+      <thead><tr>
+        <th>Início</th><th>Evento</th><th>Mercado</th><th>Linha</th>
+        <th>Lados (crua → FAIR)</th><th>Limite</th>
+      </tr></thead>
+      <tbody id="sharpBody"></tbody>
+    </table>
+    <p class="empty" id="sharpEmpty" hidden>Aguardando a primeira varredura da Pinnacle…</p>
+  </section>
+
+  <section id="pane-sharpprops" hidden>
+    <div class="cards" id="spCards"></div>
+    <div class="filters" style="padding-left:0;padding-right:0">
+      <label><input type="search" id="spSearch" placeholder="buscar jogador / time / liga"></label>
+      <span class="count" id="spCount"></span>
+    </div>
+    <p class="hint">Referência sharp de <b>player props</b> — a linha do <b>FanDuel</b> de-vigada
+      (a sharp reconhecida de props americanos). Requer <code>ODDS_API_KEY</code>.
+      No verão, popula com MLB e WNBA.</p>
+    <table id="spTable">
+      <thead><tr>
+        <th>Início</th><th>Jogo</th><th>Jogador</th><th>Mercado</th><th>Linha</th>
+        <th>Lados (crua → FAIR)</th>
+      </tr></thead>
+      <tbody id="spBody"></tbody>
+    </table>
+    <p class="empty" id="spEmpty" hidden>Sem props do FanDuel — confira a ODDS_API_KEY e a temporada (MLB/WNBA ativos no verão).</p>
+  </section>
+
+  <section id="pane-extracted" hidden>
+    <div class="filters" style="padding-left:0;padding-right:0">
+      <label>Casa
+        <select id="exSource"><option value="">todas</option>
+          <option value="bet365">Bet365</option><option value="betano">Betano</option></select>
+      </label>
+      <label><input type="search" id="exSearch" placeholder="buscar evento"></label>
+      <span class="count" id="exCount"></span>
+    </div>
+    <p class="hint">Tudo que a extensão <b>capturou da tela</b> (Bet365/Betano), cru, antes de
+      qualquer cruzamento. Se você abriu um jogo e ele aparece aqui, a captura está funcionando —
+      o value bet só surge quando bate contra uma sharp (com a Pinnacle no ar).</p>
+    <div id="exBody"></div>
+    <p class="empty" id="exEmpty" hidden>Nada capturado ainda. Abra a Bet365/Betano com a extensão ativa.</p>
+  </section>
+
+  <section id="pane-bets" hidden>
+    <div class="cards" id="summaryCards"></div>
+    <table id="betTable">
+      <thead><tr>
+        <th>#</th><th>Registrada</th><th>Jogo em</th><th>Evento</th><th>Mercado</th><th>Casa</th>
+        <th>Odd</th><th>Edge</th><th>Stake</th><th>CLV</th><th>Resultado</th><th>Lucro</th><th></th>
+      </tr></thead>
+      <tbody id="betBody"></tbody>
+    </table>
+    <p class="empty" id="betEmpty" hidden>Nenhuma aposta registrada ainda.</p>
+  </section>
+</main>
+
+<div id="parlayBar" class="parlay-bar" hidden></div>
+<footer id="footerInfo"></footer>
+<script src="/static/app.js"></script>
+</body>
+</html>

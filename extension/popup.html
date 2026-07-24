@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<style>
+  body { width: 280px; margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0d1117; color: #e6edf3; padding: 16px; }
+  .title { font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+  .mark { width: 24px; height: 24px; border-radius: 6px; background: linear-gradient(135deg, #3fb950, #2ea043); display: grid; place-items: center; font-weight: 700; color: #0d1117; font-size: 14px; }
+  .stat { background: #161b22; border: 1px solid #21272f; border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }
+  .stat-label { font-size: 11px; color: #6e7681; text-transform: uppercase; letter-spacing: 0.05em; }
+  .stat-value { font-size: 20px; font-weight: 600; font-family: ui-monospace, monospace; margin-top: 2px; }
+  .green { color: #3fb950; }
+  .hint { font-size: 11px; color: #8b949e; line-height: 1.5; margin-top: 10px; }
+  .status { font-size: 12px; padding: 6px 10px; border-radius: 6px; margin-top: 8px; text-align: center; }
+  .ok { background: rgba(63,185,80,0.12); color: #3fb950; }
+  .off { background: rgba(248,81,73,0.1); color: #f85149; }
+  button { width: 100%; margin-top: 10px; padding: 8px; border-radius: 6px; border: none; background: #1c232c; color: #e6edf3; cursor: pointer; font-size: 12px; }
+  button:hover { background: #2a313c; }
+</style>
+</head>
+<body>
+  <div class="title"><span class="mark">V</span> Leitor de Boosts</div>
+  <div class="stat">
+    <div class="stat-label">Boosts capturados (sessão)</div>
+    <div class="stat-value green" id="count">0</div>
+  </div>
+  <div class="status off" id="status">Verificando servidor...</div>
+  <div class="hint">
+    Navegue pela Betano (home, jogos, promoções). Os boosts com odd aumentada são capturados e enviados ao seu HUB automaticamente.
+  </div>
+  <button id="scan">Escanear agora (boosts)</button>
+  <button id="extract" style="background:#1f3a2a;color:#3fb950;">Extrair odds desta página</button>
+
+  <div style="border-top:1px solid #21272f;margin-top:12px;padding-top:10px;">
+    <div class="stat-label" style="margin-bottom:6px;">Bet365 — ligas para varrer (uma URL por linha)</div>
+    <textarea id="leagueUrls" rows="4" placeholder="Cole aqui as URLs das ligas da Bet365&#10;(abra a liga, copie a URL da barra e cole)&#10;ex: https://www.bet365.bet.br/#/AC/B1/C1/D8/..."
+      style="width:100%;box-sizing:border-box;background:#161b22;border:1px solid #21272f;border-radius:6px;color:#e6edf3;font-size:10px;padding:6px;font-family:ui-monospace,monospace;"></textarea>
+    <button id="crawlLeagues" style="background:#1a2a3a;color:#58a6ff;">▶ Varrer ligas coladas (Bet365)</button>
+    <button id="crawl" style="background:#2a2a1f;color:#d29922;">Varrer liga atual (Betano)</button>
+    <button id="pauseCrawl" style="background:#3a1f1f;color:#f85149;">⏸ Pausar varredura (Bet365)</button>
+  </div>
+  <div style="font-size:10px;color:#6e7681;margin-top:8px;line-height:1.5;">Auto-captura sempre ativa: ao abrir abas de mercados ou trocar de jogo, as odds novas são arquivadas sozinhas. Use "Pausar" para navegar/testar sem a extensão trocar de jogo sozinha.</div>
+  <div id="crawl-status" style="font-size:11px;color:#8b949e;text-align:center;margin-top:6px;display:none;"></div>
+  <button id="resend">Reenviar pendentes</button>
+<script src="popup.js"></script>
+</body>
+</html>

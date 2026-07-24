@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "valuehub",
+      "runtimeExecutable": "C:\\Users\\stodu\\.conda\\envs\\nfl_env\\python.exe",
+      "runtimeArgs": ["-m", "valuehub"],
+      "port": 8000
+    }
+  ]
+}

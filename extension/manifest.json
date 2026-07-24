@@ -1,0 +1,40 @@
+{
+  "manifest_version": 3,
+  "name": "Value HUB — Extrator de Odds",
+  "version": "1.0.0",
+  "description": "Captura boosts e odds da Betano e Bet365 e envia ao seu Value HUB para análise de valor.",
+  "permissions": [
+    "activeTab",
+    "tabs",
+    "storage"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "host_permissions": [
+    "https://*.betano.bet.br/*",
+    "https://*.betano.com/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*",
+    "https://*.bet365.com/*",
+    "https://*.bet365.bet.br/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.betano.bet.br/*",
+        "https://*.betano.com/*",
+        "https://*.bet365.com/*",
+        "https://*.bet365.bet.br/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Value HUB — Boosts"
+  }
+}
