@@ -22,6 +22,7 @@ from .oddsapi import OddsApiClient
 from .sources.betano import BetanoSource
 from .sources.fanduel import extract_prop_fair_lines
 from .sources.pinnacle import PinnacleSource
+from .sources.polymarket import PolymarketSource
 from .valuefinder import ValueFinder
 
 log = logging.getLogger("valuehub.poller")
@@ -32,6 +33,7 @@ class Poller:
         self.client = OddsApiClient()
         self.pinnacle = PinnacleSource()
         self.betano = BetanoSource()
+        self.polymarket = PolymarketSource()
         self.finder = ValueFinder(self.betano)
         self.running = False
 
@@ -94,7 +96,7 @@ class Poller:
             # casas-alvo (Betano) + cruzamento
             "targets": {
                 "enabled": config.BETANO_ENABLED,
-                "books": [self.betano.book],
+                "books": [self.betano.book, self.polymarket.book],
                 "last_run_at": self.tgt_last_at,
                 "last_run_ms": self.tgt_last_ms,
                 "runs": self.tgt_runs,
@@ -167,6 +169,13 @@ class Poller:
     async def targets_run(self):
         t0 = time.time()
         self.tgt_stats = await self.finder.run()
+        
+        # Polymarket cross
+        fair_events, candidates = self.finder._fair_index()
+        poly_opps = await self.polymarket.collect_opportunities(fair_events, candidates, self.tgt_stats)
+        novas = sum(1 for opp in poly_opps if db.upsert_opportunity(opp))
+        self.tgt_stats["poly_novas"] = novas
+        
         self.tgt_runs += 1
         self.tgt_last_at = time.time()
         self.tgt_last_ms = int((self.tgt_last_at - t0) * 1000)
