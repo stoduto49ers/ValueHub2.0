@@ -119,7 +119,8 @@ def evaluate_event(target_event: dict, offered: list[dict],
         if not (0.0 < fair_prob < 1.0):
             continue
 
-        edge = core.edge_percent(fair_prob, odd)
+        eval_odd = off.get("net_odd", odd)
+        edge = core.edge_percent(fair_prob, eval_odd)
         max_limit = fair.get("max_limit")
         required = _min_edge_for(max_limit)
 
@@ -148,7 +149,7 @@ def evaluate_event(target_event: dict, offered: list[dict],
                   f"{line}|{off['side']}")
         out.append({
             "id": opp_id,
-            "tab": "value",
+            "tab": "esports" if fair_event.get("sport") == "E Sports" else "value",
             "suspicious": 1 if edge > config.EDGE_SANITY_MAX_PCT else 0,
             "sport": fair_event.get("sport") or "",
             "league": fair_event.get("league") or off.get("league") or "",

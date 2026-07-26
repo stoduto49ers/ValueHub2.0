@@ -175,6 +175,7 @@ class Poller:
         poly_opps = await self.polymarket.collect_opportunities(fair_events, candidates, self.tgt_stats)
         novas = sum(1 for opp in poly_opps if db.upsert_opportunity(opp))
         self.tgt_stats["poly_novas"] = novas
+        db.deactivate_stale("Polymarket", config.STALE_AFTER_SEC)
         
         self.tgt_runs += 1
         self.tgt_last_at = time.time()
@@ -267,7 +268,7 @@ class Poller:
             log.info("motor SHARP (Pinnacle) iniciado — infra própria")
         if config.BETANO_ENABLED:
             self._tasks.append(loop.create_task(self.run_targets()))
-            log.info("motor ALVOS (Betano) iniciado — cruzamento de valor")
+            log.info("motor ALVOS (Betano + Polymarket) iniciado — cruzamento de valor")
         if config.API_KEY and config.FANDUEL_PROPS_ENABLED:
             self._tasks.append(loop.create_task(self.run_fanduel()))
             log.info("motor FANDUEL (props sharp) iniciado")

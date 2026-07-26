@@ -216,25 +216,23 @@ class BetanoSource:
     book = "Betano"
 
     def __init__(self):
-        self.http = httpx.AsyncClient(
-            base_url=config.BETANO_BASE,
-            headers={
-                "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                               "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36"),
-                "Accept": "application/json",
-                "Referer": config.BETANO_BASE + "/",
-            },
-            timeout=25.0,
-            follow_redirects=True,
-        )
+        import requests
+        self.http = requests.Session()
+        self.http.headers.update({
+            "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                           "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"),
+            "Accept": "application/json",
+            "Referer": config.BETANO_BASE + "/",
+        })
         self._leagues_cache: dict[str, tuple[float, list[dict]]] = {}
         self.last_error = ""
         self.requests_made = 0
 
     async def _get(self, path: str):
         try:
-            r = await self.http.get(path)
-        except httpx.HTTPError as e:
+            url = config.BETANO_BASE + path if path.startswith("/") else path
+            r = await asyncio.to_thread(self.http.get, url, timeout=25.0)
+        except Exception as e:
             self.last_error = f"rede: {e.__class__.__name__}"
             return None
         self.requests_made += 1
@@ -326,4 +324,4 @@ class BetanoSource:
         return parse_markets(event, mkts)
 
     async def close(self):
-        await self.http.aclose()
+        self.http.close()

@@ -13,7 +13,16 @@ const state = {
 };
 
 /* ---------------------------------------------------------------- helpers */
-const fmtOdd = (o) => (o == null ? "—" : Number(o).toFixed(o >= 10 ? 1 : 2));
+const fmtOdd = (o, book) => {
+  if (o == null) return "—";
+  const num = Number(o);
+  let base = num.toFixed(num >= 10 ? 1 : 2);
+  if (book === "Polymarket") {
+    let prob = (1.0 / num).toFixed(2).replace(".", ",");
+    base += ` <small style="color:#888;">(${prob})</small>`;
+  }
+  return base;
+};
 const fmtPct = (p) => (p == null ? "—" : `${p > 0 ? "+" : ""}${Number(p).toFixed(2)}%`);
 const fmtBRL = (v) => `R$ ${Number(v).toFixed(2)}`;
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
@@ -189,7 +198,7 @@ async function toggleFamily(el) {
          data-line="${esc(line)}" data-odd="${o.offered_odd}" data-stake="${o.stake_units}">
       <input type="checkbox" class="fam-pick" title="marque para incluir no rateio de stake">
       <span class="mkt-side" style="min-width:90px">${esc(o.side)} ${line}</span>
-      <span>odd <b class="odd-cell">${fmtOdd(o.offered_odd)}</b></span>
+      <span>odd <b class="odd-cell">${fmtOdd(o.offered_odd, o.book)}</b></span>
       <span class="fair-cell">fair ${fmtOdd(o.fair_odd)}</span>
       ${edgeBadge(o)}
       <span class="stake">${o.stake_units}u <small>(${fmtBRL(o.stake_amount)})</small></span>
@@ -284,12 +293,13 @@ function marketLabel(o) {
 }
 
 async function refreshOpps() {
-  if (!["value", "props", "other"].includes(state.tab)) return;
+  if (!["value", "esports", "props", "other"].includes(state.tab)) return;
   const q = new URLSearchParams({
     tab: state.tab,
     min_edge: $("fMinEdge").value || 0,
     min_limit: $("fMinLimit").value || 0,
     sport: $("fSport").value,
+    book: $("fBook").value,
     search: $("fSearch").value.trim(),
   });
   let data;
@@ -311,7 +321,7 @@ async function refreshOpps() {
           <div class="ev-sub">${esc(o.sport)} · ${esc(o.league)}${matchBadge(o)}${sharpBadge(o)}</div></td>
       <td>${marketLabel(o)}${familyNote(o)}</td>
       <td>${esc(o.book)}</td>
-      <td class="odd-cell">${fmtOdd(o.offered_odd)}</td>
+      <td class="odd-cell">${fmtOdd(o.offered_odd, o.book)}</td>
       <td class="fair-cell">${fmtOdd(o.fair_odd)}</td>
       <td>${edgeBadge(o)}</td>
       <td class="limit">${o.max_limit ? "€" + Math.round(o.max_limit) : "—"}<br>
@@ -494,7 +504,11 @@ async function refreshBets() {
        style="display:inline-block">⬇ Exportar CSV</a>
        <div class="l">para planilhar</div></div>`;
 
-  const rows = bets.rows;
+  let rows = bets.rows;
+  const fSport = $("bSport") ? $("bSport").value : "";
+  const fTab = $("bTab") ? $("bTab").value : "";
+  if (fSport) rows = rows.filter((r) => r.sport === fSport);
+  if (fTab) rows = rows.filter((r) => r.source_tab === fTab);
   $("betEmpty").hidden = rows.length > 0;
 
   // agrupa pela DATA DO JOGO (event_date), não pela data de registro
@@ -570,6 +584,7 @@ async function refreshBets() {
       <td><div>${esc(b.player ? `${b.player} — ${b.market}` : b.market)}${b.hdp != null ? " " + b.hdp : ""}</div>
           <div class="ev-sub mkt-side">${esc(b.selection)}</div></td>
       <td>${esc(b.book)}</td>
+      <td>${esc(b.source_tab || "—")}</td>
       <td class="odd-cell">${fmtOdd(b.odd_taken)}</td>
       <td>${fmtPct(b.edge_pct)}</td>
       <td class="stake">${b.stake_units}u <small>(${fmtBRL(b.stake_amount)})</small></td>
@@ -693,7 +708,7 @@ async function refreshNearMisses(show) {
       <td><div class="ev-name">${esc(r.event)}</div><div class="ev-sub">${esc(r.league)}</div></td>
       <td>${esc(r.market)}${ln} <span class="mkt-side">${esc(r.side)}</span></td>
       <td>${esc(r.book)}</td>
-      <td class="odd-cell">${fmtOdd(r.offered_odd)}</td>
+      <td class="odd-cell">${fmtOdd(r.offered_odd, r.book)}</td>
       <td class="fair-cell">${fmtOdd(r.fair_odd)}</td>
       <td class="${cls}"><b>${fmtPct(r.edge_pct)}</b></td>
       <td class="limit">≥${r.min_edge_required}%</td>
@@ -820,7 +835,7 @@ document.querySelectorAll(".tab").forEach((t) =>
     document.querySelectorAll(".tab").forEach((x) => x.classList.remove("active"));
     t.classList.add("active");
     state.tab = t.dataset.tab;
-    const opps = ["value", "props", "other"].includes(state.tab);
+    const opps = ["value", "esports", "props", "other"].includes(state.tab);
     $("pane-opps").hidden = !opps;
     $("filtersBar").style.display = opps ? "" : "none";
     $("pane-boosts").hidden = state.tab !== "boosts";
@@ -836,8 +851,14 @@ document.querySelectorAll(".tab").forEach((t) =>
     if (state.tab === "bets") refreshBets();
   }));
 
-["fMinEdge", "fMinLimit", "fSport", "fSearch", "fSuspicious"].forEach((id) =>
-  $(id).addEventListener("input", () => refreshOpps()));
+["fMinEdge", "fMinLimit", "fSport", "fBook", "fSearch", "fSuspicious"].forEach((id) => {
+  if ($(id)) {
+    const ev = (id === "fSearch" || id === "fMinEdge") ? "input" : "change";
+    $(id).addEventListener(ev, () => refreshOpps());
+  }
+});
+if ($("bSport")) $("bSport").addEventListener("change", () => refreshBets());
+if ($("bTab")) $("bTab").addEventListener("change", () => refreshBets());
 
 /* ------------------------------------------------------------------ loop */
 refreshStatus();

@@ -202,6 +202,7 @@ def match_event(target: dict, candidates: list[dict],
       - dois candidatos empatados dentro de `ambiguity_margin` (ambíguo)
     """
     t_start = parse_time(target.get("start"))
+    exact_date = target.get("exact_date")
     # Sem horário confiável (ex.: Bet365 lido do DOM) casamos só pelos times,
     # mas então exigimos pontuação mais alta e ambiguidade zero — a proteção
     # contra casar o jogo errado passa a depender só disso.
@@ -211,8 +212,13 @@ def match_event(target: dict, candidates: list[dict],
 
     scored: list[tuple[float, dict]] = []
     for c in candidates:
+        c_start = parse_time(c.get("start"))
+        
+        if exact_date and c_start:
+            if c_start.strftime("%Y-%m-%d") != exact_date:
+                continue
+                
         if not sem_horario:
-            c_start = parse_time(c.get("start"))
             if c_start is None:
                 continue
             if abs((c_start - t_start).total_seconds()) > max_minutes * 60:
@@ -234,6 +240,12 @@ def match_event(target: dict, candidates: list[dict],
     margem = ambiguity_margin * (2 if sem_horario else 1)
     if len(scored) > 1 and (best_score - scored[1][0]) < margem:
         return None
+        
+    # Se passou sem ambiguidade e tem validação estrita de data ou horário (dentro da margem),
+    # é 100% certo que é o mesmo jogo. Sobe para 1.0 para o frontend não alertar "casamento 91%".
+    if exact_date or not sem_horario:
+        best_score = 1.0
+        
     return {"event": best, "score": round(best_score, 4)}
 
 

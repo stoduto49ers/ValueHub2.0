@@ -82,7 +82,7 @@ ODDS_DAMPEN_FLOOR = 0.4      # nunca reduz abaixo de 40% da stake do Kelly
 # Ampliado para bater com o que o caminho Pinnacle/Betano já cobre — senão a
 # maioria dos value bets da Bet365 (48/ciclo!) fica escondida em "Outros".
 VALUE_SPORTS = {"Football", "Basketball", "Baseball",
-                "Ice Hockey", "American Football"}
+                "Ice Hockey", "American Football", "E Sports"}
 VALUE_MARKETS = {"ML", "Moneyline", "Spread", "Totals",
                  "Corners Spread", "Corners Totals",
                  "Bookings Spread", "Bookings Totals"}
@@ -126,7 +126,8 @@ MAJOR_LEAGUES = [
     "usa - nfl", "usa - nhl", "usa - mlb", "usa - nba", "usa - wnba",
     "canada - cfl",
     # -- MMA / boxe: só os eventos grandes, que têm liquidez
-    "ufc", "bellator", "pfl",
+    # -- E-Sports
+    "league of legends", "valorant", "dota 2", "cs2", "cs:go",
 ]
 ONLY_MAJOR_LEAGUES = True     # False = coleta/mostra todas as ligas
 
@@ -153,18 +154,15 @@ PROPS_MIN_EDGE_PCT = 4.0      # props têm consenso mais fraco -> exige mais edg
 # balança um mercado de €50/€100, então lá o corte é alto (>10%). Conforme o
 # limite sobe, o corte cai, até o piso de 2,8% que o usuário escolheu.
 LIQUIDITY_TIERS = [
-    (2500, 2.8),   # >= €2500: muito líquido -> piso 2,8%
-    (1500, 3.5),
-    (800,  4.5),
-    (400,  6.0),
-    (200,  8.0),
-    (100, 10.5),   # €100 -> exige > 10%
-    (0,   13.0),   # < €100 (ex.: €50) -> exige 13%
+    (2000, 2.5),   # Limite > 2000 (Super Grande) -> exige 2.5%
+    (701,  4.0),   # Limite > 700 (Grande) -> exige 4.0%
+    (301,  6.5),   # Limite > 300 (Médio) -> exige 6.5%
+    (0,    8.0),   # Limite < 300 (Pequeno) -> exige 8.0%+
 ]
 MIN_MAX_ABSOLUTE = 50         # mercados com max < €50 são descartados
 DEFAULT_MIN_EDGE_PCT = 4.0    # quando o mercado não informa `max`
 EDGE_SANITY_MAX_PCT = 20.0    # acima disso marca como "suspeita" (linha podre/palp)
-MIN_DISPLAY_EDGE_PCT = 2.8    # piso de EXIBIÇÃO: edge < 2,8% nunca aparece no painel
+MIN_DISPLAY_EDGE_PCT = 2.5    # piso de EXIBIÇÃO: edge < 2.5% nunca aparece no painel
 
 # ----------------------------------------------------------------------------
 # POLLER
@@ -240,6 +238,7 @@ PINNACLE_SPORTS = {
     "Baseball": 3,              # MLB
     "Hockey": 19,               # NHL
     "Mixed Martial Arts": 22,   # UFC
+    "E Sports": 12,             # E-Sports
 }
 
 # Só colhe jogos que começam dentro desta janela (economiza requests).
@@ -309,10 +308,12 @@ BETANO_LEAGUE_URLS = [
     # -- basquete e beisebol americanos (game lines com sharp na Pinnacle;
     #    a Betano TEM esses jogos e também player props deles)
     "/basquete/eua/nba/", "/basquete/eua/wnba/", "/beisebol/eua/mlb/",
+    # -- MMA (UFC, Bellator, PFL)
+    "/mma/ufc/", "/mma/bellator/", "/mma/pfl/",
 ]
 # Esportes da Betano a varrer (slug na URL deles). Cada um busca suas ligas e
 # filtra por BETANO_LEAGUE_URLS.
-BETANO_SPORTS = ["futebol", "basquete", "beisebol"]
+BETANO_SPORTS = ["futebol", "basquete", "beisebol", "mma"]
 
 # ----------------------------------------------------------------------------
 # MERCADOS PROFUNDOS via navegador (Handicap Asiático & linhas de quarto)

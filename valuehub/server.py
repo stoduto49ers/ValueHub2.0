@@ -82,14 +82,15 @@ def api_status():
 def api_opportunities(tab: str = "value", min_edge: float = 0.0,
                       sport: str = "", search: str = "", active: int = 1,
                       limit: int = 300, collapse: int = 1, hide_bet: int = 1,
-                      min_limit: float = 0.0):
+                      min_limit: float = 0.0, book: str = ""):
     # piso de exibição: edge < MIN_DISPLAY_EDGE_PCT nunca aparece, mesmo que o
     # filtro do painel peça menos (o usuário não tem interesse abaixo disso)
     min_edge = max(min_edge, config.MIN_DISPLAY_EDGE_PCT)
     rows = db.list_opportunities(tab=tab, active_only=bool(active),
                                  min_edge=min_edge, sport=sport, search=search,
                                  limit=limit, collapse=bool(collapse),
-                                 hide_bet=bool(hide_bet), min_limit=min_limit)
+                                 hide_bet=bool(hide_bet), min_limit=min_limit,
+                                 book=book)
     return {"count": len(rows), "rows": rows}
 
 

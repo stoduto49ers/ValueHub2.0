@@ -20,6 +20,7 @@
 
 <nav class="tabs">
   <button class="tab active" data-tab="value">⚽ Value Bets</button>
+  <button class="tab" data-tab="esports">🎮 Value Esports</button>
   <button class="tab" data-tab="props">🎯 Value Props</button>
   <button class="tab" data-tab="sharp">📡 Sharp</button>
   <button class="tab" data-tab="sharpprops">📡 Sharp Props</button>
@@ -35,9 +36,21 @@
   <label>Esporte
     <select id="fSport">
       <option value="">todos</option>
-      <option>Football</option><option>Basketball</option>
-      <option>American Football</option><option>Ice Hockey</option>
-      <option>Baseball</option><option>Tennis</option>
+      <option value="Soccer">Soccer (Futebol)</option>
+      <option value="Basketball">Basketball</option>
+      <option value="Football">American Football</option>
+      <option value="Hockey">Ice Hockey</option>
+      <option value="Baseball">Baseball</option>
+      <option value="Tennis">Tennis</option>
+      <option value="E Sports">E-Sports</option>
+    </select>
+  </label>
+  <label>Casa
+    <select id="fBook">
+      <option value="">todas</option>
+      <option value="Betano">Betano</option>
+      <option value="Polymarket">Polymarket</option>
+      <option value="Bet365">Bet365</option>
     </select>
   </label>
   <label><input type="search" id="fSearch" placeholder="buscar evento / liga / jogador"></label>
@@ -169,10 +182,33 @@
   </section>
 
   <section id="pane-bets" hidden>
+    <div class="filters" style="padding-left:0;padding-right:0">
+      <label>Esporte
+        <select id="bSport">
+          <option value="">todos</option>
+          <option value="Soccer">Soccer (Futebol)</option>
+          <option value="Basketball">Basketball</option>
+          <option value="Football">American Football</option>
+          <option value="Hockey">Ice Hockey</option>
+          <option value="Baseball">Baseball</option>
+          <option value="Tennis">Tennis</option>
+          <option value="E Sports">E-Sports</option>
+        </select>
+      </label>
+      <label>Origem
+        <select id="bTab">
+          <option value="">todas</option>
+          <option value="value">Value Bets</option>
+          <option value="esports">Value Esports</option>
+          <option value="props">Value Props</option>
+          <option value="dupla">Dupla</option>
+        </select>
+      </label>
+    </div>
     <div class="cards" id="summaryCards"></div>
     <table id="betTable">
       <thead><tr>
-        <th>#</th><th>Registrada</th><th>Jogo em</th><th>Evento</th><th>Mercado</th><th>Casa</th>
+        <th>#</th><th>Registrada</th><th>Jogo em</th><th>Evento</th><th>Mercado</th><th>Casa</th><th>Origem</th>
         <th>Odd</th><th>Edge</th><th>Stake</th><th>CLV</th><th>Resultado</th><th>Lucro</th><th></th>
       </tr></thead>
       <tbody id="betBody"></tbody>
@@ -183,6 +219,6 @@
 
 <div id="parlayBar" class="parlay-bar" hidden></div>
 <footer id="footerInfo"></footer>
-<script src="/static/app.js"></script>
+<script src="/static/app.js?v=2"></script>
 </body>
 </html>

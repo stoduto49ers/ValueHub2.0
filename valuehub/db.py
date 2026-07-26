@@ -64,7 +64,8 @@ def init():
             book TEXT, fair_odd REAL, odd_taken REAL, edge_pct REAL,
             stake_units REAL, stake_amount REAL,
             clv_pct REAL, odd_close REAL,
-            result TEXT, profit REAL, settled INTEGER DEFAULT 0, ts_settled TEXT
+            result TEXT, profit REAL, settled INTEGER DEFAULT 0, ts_settled TEXT,
+            source_tab TEXT
         );
 
         CREATE TABLE IF NOT EXISTS boosts (
@@ -115,6 +116,8 @@ def init():
             con.execute("ALTER TABLE bets ADD COLUMN legs_ids TEXT")
         if "legs_json" not in bcols:   # pernas [{id,odd,label}] p/ liquidar por perna
             con.execute("ALTER TABLE bets ADD COLUMN legs_json TEXT")
+        if "source_tab" not in bcols:
+            con.execute("ALTER TABLE bets ADD COLUMN source_tab TEXT")
         # backfill: duplas antigas (têm legs_ids, mas não legs_json) — reconstrói
         # os dados das pernas pelas oportunidades, se ainda existirem no banco
         for r in con.execute("SELECT id, legs_ids FROM bets WHERE "
@@ -168,11 +171,12 @@ def upsert_opportunity(o: dict) -> bool:
             UPDATE opportunities SET offered_odd=?, fair_odd=?, fair_prob=?,
                 edge_pct=?, best_edge_pct=?, min_edge_required=?, max_limit=?,
                 direct_link=?, stake_units=?, stake_amount=?, suspicious=?,
-                last_seen=?, active=1
+                last_seen=?, active=1, match_score=?, tab=?
             WHERE id=?
         """, (o["offered_odd"], o["fair_odd"], o["fair_prob"], o["edge_pct"],
               best, o["min_edge_required"], o["max_limit"], o["direct_link"],
-              o["stake_units"], o["stake_amount"], o["suspicious"], now, o["id"]))
+              o["stake_units"], o["stake_amount"], o["suspicious"], now, 
+              o.get("match_score"), o["tab"], o["id"]))
         return False
 
 
@@ -317,7 +321,7 @@ def list_opportunities(tab: str = "", active_only: bool = True,
                        min_edge: float = 0.0, sport: str = "",
                        search: str = "", limit: int = 300,
                        collapse: bool = True, hide_bet: bool = True,
-                       min_limit: float = 0.0) -> list[dict]:
+                       min_limit: float = 0.0, book: str = "") -> list[dict]:
     q = "SELECT * FROM opportunities WHERE 1=1"
     args: list = []
     if tab:
@@ -330,6 +334,8 @@ def list_opportunities(tab: str = "", active_only: bool = True,
         q += " AND max_limit >= ?"; args.append(min_limit)
     if sport:
         q += " AND sport=?"; args.append(sport)
+    if book:
+        q += " AND book=?"; args.append(book)
     if search:
         q += " AND (event_home LIKE ? OR event_away LIKE ? OR league LIKE ? OR player LIKE ?)"
         args += [f"%{search}%"] * 4
@@ -425,9 +431,19 @@ def upsert_fair_lines(lines: list[dict]) -> int:
 
 def list_fair_lines(sport: str = "", market: str = "", search: str = "",
                     source: str = "", is_prop: bool | None = None,
+                    active_only: bool = True,
                     limit: int = 500) -> list[dict]:
     q = "SELECT * FROM fair_lines WHERE 1=1"
     args: list = []
+    
+    if active_only:
+        from datetime import datetime, timezone, timedelta
+        now = datetime.now(timezone.utc)
+        now_str = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+        stale_threshold = (now - timedelta(minutes=15)).isoformat()
+        q += " AND event_date > ? AND updated_at > ?"
+        args.extend([now_str, stale_threshold])
+        
     if source:
         q += " AND source=?"; args.append(source)
     if is_prop is True:
@@ -477,13 +493,14 @@ def register_bet(opp: dict, stake_units: float, stake_amount: float,
         cur = con.execute("""
             INSERT INTO bets (opportunity_id, ts_placed, event, event_date,
                 sport, league, market, hdp, selection, player, book,
-                fair_odd, odd_taken, edge_pct, stake_units, stake_amount)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                fair_odd, odd_taken, edge_pct, stake_units, stake_amount,
+                source_tab)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (opp["id"], utcnow(),
               f"{opp['event_home']} vs {opp['event_away']}", opp["event_date"],
               opp["sport"], opp["league"], opp["market"], opp["hdp"],
               opp["side"], opp["player"], opp["book"], opp["fair_odd"],
-              odd_taken, opp["edge_pct"], stake_units, stake_amount))
+              odd_taken, opp["edge_pct"], stake_units, stake_amount, opp.get("tab", "")))
         return cur.lastrowid
 
 
@@ -511,12 +528,12 @@ def register_parlay(opps: list[dict], odd_taken: float, fair_odd: float,
             INSERT INTO bets (opportunity_id, ts_placed, event, event_date,
                 sport, league, market, hdp, selection, player, book,
                 fair_odd, odd_taken, edge_pct, stake_units, stake_amount,
-                legs_ids, legs_json)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                legs_ids, legs_json, source_tab)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, ("", utcnow(), f"Dupla: {ev}", event_date, "", "",
               f"Dupla ({len(opps)})", None, sel, "", book,
               fair_odd, odd_taken, edge_pct, stake_units, stake_amount,
-              legs_ids, legs_json))
+              legs_ids, legs_json, "dupla"))
         return cur.lastrowid
 
 
