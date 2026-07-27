@@ -323,16 +323,22 @@ class PolymarketSource:
                                     match_q = re.search(r"(.*?)\s*\(([+-][0-9.]+)\)", question)
                                     if match_q:
                                         # Extrai o nome do time que está na pergunta associado à linha
-                                        q_team = match_q.group(1).replace("Spread:", "").replace("1st 5 Innings Spread:", "").replace("Puck Line:", "").replace("Run Line:", "").strip()
+                                        q_team = match_q.group(1).lower()
+                                        for prefix in ["spread:", "1st 5 innings spread:", "puck line:", "run line:", "game handicap:"]:
+                                            q_team = q_team.replace(prefix, "")
+                                        q_team = q_team.strip()
                                         q_line = float(match_q.group(2))
                                         
-                                        # Se o side_name atual for o time da pergunta, usa a linha dele.
-                                        # Senão (é o adversário), inverte o sinal da linha!
-                                        if matching.team_similarity(side_name.lower(), q_team.lower()) > 0.6:
+                                        # Qual dos dois outcomes se parece mais com o q_team?
+                                        sim_this = matching.team_similarity(side_name.lower(), q_team)
+                                        # acha o outro outcome:
+                                        other_side = mkt_outcomes[0] if mkt_outcomes[0] != side_name else (mkt_outcomes[1] if len(mkt_outcomes) > 1 else "")
+                                        sim_other = matching.team_similarity(other_side.lower(), q_team) if other_side else 0
+                                        
+                                        if sim_this >= sim_other and sim_this > 0:
                                             line = q_line
                                         else:
                                             line = -q_line
-                                    else:
                                         # Fallback antigo: Dividir a string por 'vs' e analisar cada parte
                                         parts = re.split(r'\bvs\b', text_lower)
                                         for part in parts:
