@@ -18,20 +18,45 @@ import os
 API_BASE = "https://api.odds-api.io/v3"
 
 
-def _load_api_key() -> str:
-    key = os.environ.get("ODDS_API_KEY", "").strip()
-    if key:
-        return key
+def _load_env(name: str) -> str:
+    """Lê uma variável do ambiente ou do arquivo .env na raiz. NUNCA commite o .env."""
+    val = os.environ.get(name, "").strip()
+    if val:
+        return val
     env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
     if os.path.exists(env_path):
         for line in open(env_path, encoding="utf-8"):
             line = line.strip()
-            if line.startswith("ODDS_API_KEY="):
+            if line.startswith(name + "="):
                 return line.split("=", 1)[1].strip()
     return ""
 
 
+def _load_api_key() -> str:
+    return _load_env("ODDS_API_KEY")
+
+
 API_KEY = _load_api_key()
+
+# ----------------------------------------------------------------------------
+# THE-ODDS-API (the-odds-api.com) — feed da BET365 SOB DEMANDA (não automático).
+# Provedor DIFERENTE da odds-api.io. Free tier: 500 requests/mês. Cada pull de
+# um esporte custa ~1 crédito POR MERCADO (h2h, spreads, totals). Puxamos as odds
+# CRUAS da Bet365 e cruzamos contra a nossa Pinnacle — só quando você clica no
+# botão do painel. Chave no .env: THE_ODDS_API_KEY=xxxx
+# ----------------------------------------------------------------------------
+THE_ODDS_API_KEY = _load_env("THE_ODDS_API_KEY")
+THE_ODDS_API_BASE = "https://api.the-odds-api.com/v4"
+# A Bet365 é britânica -> aparece na região "uk" (confirmado: na "eu" ela não
+# vinha). Se alguma liga não trouxer Bet365, dá p/ tentar "uk,eu" (dobra o custo:
+# 1 crédito por mercado POR região).
+THE_ODDS_API_REGIONS = "uk"
+THE_ODDS_API_MARKETS = "h2h,spreads,totals"  # ML / Spread / Totals
+# ATENÇÃO: a the-odds-api NÃO carrega a BET365 (omissão do provedor, confirmado:
+# 23 jogos MLB/UK, 19 casas, zero bet365). O painel mostra as casas que EXISTEM
+# quando a alvo não aparece. Coloque aqui a key de uma casa presente (ex.:
+# "betfair_ex_uk" = Betfair Exchange, um sinal SHARP forte; "williamhill"; etc.).
+THE_ODDS_API_BOOKMAKER = "bet365"
 
 # ----------------------------------------------------------------------------
 # CASAS-ALVO — uma chamada de /value-bets por casa por ciclo.
@@ -215,6 +240,19 @@ SHARP_WEIGHTS_PROPS = {
     "_default": 0.4,
 }
 
+# E-SPORTS: a Pinnacle é MENOS dominante, então a fair é uma média ponderada de
+# várias casas (todas de-vigadas por Shin). Interno — não aparece no painel.
+#   Pinnacle 50% · Polymarket 25% · casas-alvo (Betano/Bet365/...) DIVIDINDO 25%.
+# Dividir os 25% entre as casas-alvo evita que adicionar casas afogue a Pinnacle.
+# Incluir a própria casa onde se aposta é CONSERVADOR (reduz o edge medido, nunca
+# superestima). Vale SÓ p/ e-sports; nos grandes esportes a fair segue SHARP_WEIGHTS.
+ESPORTS_CONSENSUS_ENABLED = True
+ESPORTS_SPORT_NAME = "E Sports"           # como a Pinnacle nomeia o esporte (id 12)
+ESPORTS_WEIGHT_PINNACLE = 0.50
+ESPORTS_WEIGHT_POLYMARKET = 0.25
+ESPORTS_WEIGHT_SOFT_GROUP = 0.25          # dividido entre as casas-alvo presentes
+ESPORTS_SOFT_SOURCES = {"betano", "bet365"}   # casas-alvo (dividem o grupo soft)
+
 # ============================================================================
 # FONTES SHARP PRÓPRIAS (infra nossa — sem custo recorrente)
 # ============================================================================
@@ -310,10 +348,14 @@ BETANO_LEAGUE_URLS = [
     "/basquete/eua/nba/", "/basquete/eua/wnba/", "/beisebol/eua/mlb/",
     # -- MMA (UFC, Bellator, PFL)
     "/mma/ufc/", "/mma/bellator/", "/mma/pfl/",
+    # -- E-SPORTS (só os 4 principais; o slug do esporte é 'esports' e as ligas
+    #    vêm com o jogo no caminho: /sport/esports/<jogo>/<liga>/<id>/).
+    #    Isso filtra fora Rainbow Six, Mobile Legends, Overwatch, King of Glory.
+    "/counter-strike/", "/league-of-legends/", "/dota-2/", "/valorant/",
 ]
 # Esportes da Betano a varrer (slug na URL deles). Cada um busca suas ligas e
 # filtra por BETANO_LEAGUE_URLS.
-BETANO_SPORTS = ["futebol", "basquete", "beisebol", "mma"]
+BETANO_SPORTS = ["futebol", "basquete", "beisebol", "mma", "esports"]
 
 # ----------------------------------------------------------------------------
 # MERCADOS PROFUNDOS via navegador (Handicap Asiático & linhas de quarto)

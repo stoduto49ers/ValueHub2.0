@@ -158,6 +158,42 @@ def api_opportunity_family(id: str):
     return {"rows": db.list_family(id)}
 
 
+from .sources.theoddsapi import TheOddsApiSource
+_theoddsapi = TheOddsApiSource()
+
+
+@app.get("/api/theoddsapi_sports")
+async def theoddsapi_sports():
+    """Lista de esportes da the-odds-api (NÃO consome créditos). Para o dropdown
+    do botão 'Puxar Bet365'."""
+    sports = await _theoddsapi.list_sports()
+    return {"sports": sports, "error": _theoddsapi.last_error,
+            "remaining": _theoddsapi.requests_remaining,
+            "configured": bool(config.THE_ODDS_API_KEY)}
+
+
+@app.post("/api/pull_bet365")
+async def pull_bet365(req: Request):
+    """SOB DEMANDA: puxa as odds da Bet365 (the-odds-api) de UM esporte e cruza
+    contra a Pinnacle. Consome ~1 crédito por mercado — por isso é só no clique."""
+    d = await req.json()
+    sport_key = (d.get("sport_key") or "").strip()
+    if not sport_key:
+        raise HTTPException(400, "escolha um esporte (sport_key)")
+    events = await _theoddsapi.fetch_bet365(sport_key)
+    if _theoddsapi.last_error:
+        raise HTTPException(400, _theoddsapi.last_error)
+    result = await poller.finder.cross_theoddsapi(events)
+    return {"ok": True, **result,
+            "raw_events": _theoddsapi.last_raw_count,   # jogos brutos da API
+            "book": config.THE_ODDS_API_BOOKMAKER,      # casa que procuramos
+            "com_book": len(events),                    # jogos com a casa alvo
+            "available_books": _theoddsapi.last_available_books,
+            "region": config.THE_ODDS_API_REGIONS,
+            "remaining": _theoddsapi.requests_remaining,
+            "used": _theoddsapi.requests_used}
+
+
 @app.get("/api/near_misses")
 def api_near_misses():
     """Melhores linhas do último ciclo, mesmo abaixo do corte de edge.

@@ -137,6 +137,18 @@ tr.bet-group.today td { color: var(--warn); background: #241b10; }
 tr.bet-today td { background: rgba(255, 181, 77, 0.07); }
 tr.bet-today:hover td { background: rgba(255, 181, 77, 0.12); }
 
+/* card de pull da Bet365 (The-Odds-API) — sob demanda */
+.card.b365pull {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 10px 14px; margin-bottom: 14px;
+}
+.card.b365pull .b365-title { font-weight: 700; color: var(--accent2); }
+.card.b365pull select {
+  background: var(--bg3); border: 1px solid var(--border); color: var(--text);
+  border-radius: 6px; padding: 5px 8px; font-size: 13px; max-width: 320px;
+}
+#b365PullMsg { margin-left: auto; }
+
 /* liquidação de DUPLA por perna */
 .parlay-settle { display: flex; flex-direction: column; gap: 5px; min-width: 220px; }
 .pl-leg { display: flex; align-items: center; gap: 8px; justify-content: space-between; }

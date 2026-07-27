@@ -26,10 +26,32 @@ def source_weight(source: str, is_prop: bool) -> float:
     return tabela.get(source, tabela.get("_default", 1.0))
 
 
-def combine_side(entries: list[dict], is_prop: bool) -> dict | None:
+def esports_weights(sources_present) -> dict:
+    """Pesos do consenso de E-SPORTS: Pinnacle 0.50, Polymarket 0.25, e as
+    casas-alvo presentes (Betano/Bet365/...) DIVIDINDO 0.25 igualmente. Assim,
+    adicionar casas-alvo não reduz o peso da Pinnacle. Fonte sem peso definido
+    entra com 0 (não influencia)."""
+    softs = {s for s in sources_present if s in config.ESPORTS_SOFT_SOURCES}
+    per_soft = (config.ESPORTS_WEIGHT_SOFT_GROUP / len(softs)) if softs else 0.0
+    w = {}
+    for s in set(sources_present):
+        if s == "pinnacle":
+            w[s] = config.ESPORTS_WEIGHT_PINNACLE
+        elif s == "polymarket":
+            w[s] = config.ESPORTS_WEIGHT_POLYMARKET
+        elif s in config.ESPORTS_SOFT_SOURCES:
+            w[s] = per_soft
+        else:
+            w[s] = 0.0
+    return w
+
+
+def combine_side(entries: list[dict], is_prop: bool, weights: dict | None = None) -> dict | None:
     """Combina as fair probs de um MESMO lado vindas de várias fontes.
 
     entries: [{source, fair_prob, fair_odd, raw_odd, max_limit}, ...]
+    weights: tabela {fonte: peso} explícita (ex.: e-sports). Se None, usa os
+             pesos padrão de sharp (SHARP_WEIGHTS / SHARP_WEIGHTS_PROPS).
     Retorna a entrada de consenso (média ponderada da prob) ou None.
     """
     num = den = 0.0
@@ -39,12 +61,13 @@ def combine_side(entries: list[dict], is_prop: bool) -> dict | None:
         p = e.get("fair_prob")
         if not p or not (0.0 < p < 1.0):
             continue
-        w = source_weight(e.get("source", ""), is_prop)
+        src = e.get("source", "")
+        w = weights.get(src, 0.0) if weights is not None else source_weight(src, is_prop)
         if w <= 0:
             continue
         num += w * p
         den += w
-        fontes.append(e.get("source"))
+        fontes.append(src)
         if e.get("max_limit"):
             limites.append(e["max_limit"])
     if den <= 0:

@@ -860,9 +860,54 @@ document.querySelectorAll(".tab").forEach((t) =>
 if ($("bSport")) $("bSport").addEventListener("change", () => refreshBets());
 if ($("bTab")) $("bTab").addEventListener("change", () => refreshBets());
 
+/* -------------------------------------------- Bet365 via The-Odds-API (sob demanda) */
+async function initB365Pull() {
+  const sel = $("b365Sport"), msg = $("b365PullMsg"), card = $("b365PullCard");
+  if (!sel) return;
+  let data;
+  try { data = await jget("/api/theoddsapi_sports"); } catch (_) { return; }
+  if (!data.configured) {
+    if (card) card.style.opacity = "0.6";
+    msg.innerHTML = `<span class="neg">sem chave — ponha THE_ODDS_API_KEY no .env</span>`;
+    return;
+  }
+  const sports = data.sports || [];
+  sel.innerHTML = `<option value="">— escolher esporte —</option>` +
+    sports.map((s) => `<option value="${esc(s.key)}">${esc(s.group ? s.group + " · " : "")}${esc(s.title)}</option>`).join("");
+  msg.innerHTML = data.error
+    ? `<span class="neg">${esc(data.error)}</span>`
+    : `${sports.length} esportes` + (data.remaining != null ? ` · <b>${esc(data.remaining)}</b> créditos restantes` : "");
+}
+
+if ($("b365Pull")) $("b365Pull").addEventListener("click", async () => {
+  const btn = $("b365Pull"), sel = $("b365Sport"), msg = $("b365PullMsg");
+  const sport_key = sel.value;
+  if (!sport_key) { msg.innerHTML = `<span class="neg">escolha um esporte primeiro</span>`; return; }
+  btn.disabled = true; msg.textContent = "puxando (1 crédito por mercado)…";
+  try {
+    const r = await jpost("/api/pull_bet365", { sport_key });
+    let hint = "";
+    if (r.com_book === 0) {
+      if (r.raw_events > 0) {
+        const casas = (r.available_books || []).join(", ") || "(nenhuma)";
+        hint = ` <span class="neg">— "${esc(r.book)}" NÃO existe na the-odds-api. ${r.raw_events} jogos com estas casas: ${esc(casas)}. Ajuste THE_ODDS_API_BOOKMAKER para uma delas.</span>`;
+      } else {
+        hint = ` <span class="ev-sub">— sem jogos nessa liga agora</span>`;
+      }
+    } else if (r.casados === 0) {
+      hint = ` <span class="ev-sub">— ${r.com_book} jogos com "${esc(r.book)}", mas nenhum casou com a Pinnacle</span>`;
+    }
+    msg.innerHTML = `✅ ${r.com_book} jogos c/ ${esc(r.book)} · ${r.casados} casados · <b class="pos">${r.novas} novas</b>` +
+      (r.remaining != null ? ` · <b>${esc(r.remaining)}</b> créditos` : "") + hint;
+    if (["value", "props", "other"].includes(state.tab)) refreshOpps();
+  } catch (e) { msg.innerHTML = `<span class="neg">erro: ${esc(e.message)}</span>`; }
+  finally { btn.disabled = false; }
+});
+
 /* ------------------------------------------------------------------ loop */
 refreshStatus();
 refreshOpps();
+initB365Pull();
 setInterval(refreshStatus, 10_000);
 setInterval(() => {
   // enquanto uma expansão está aberta, NÃO recarrega a lista (senão fecha a

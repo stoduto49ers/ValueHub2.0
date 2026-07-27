@@ -90,7 +90,23 @@
       "Bash(C:/Users/stodu/.conda/envs/nfl_env/python.exe -c \"import ast; [ast.parse\\(open\\(f,encoding='utf-8'\\).read\\(\\)\\) for f in ['valuehub/server.py','valuehub/db.py','valuehub/sources/extension_parser.py']]; print\\('py OK'\\)\")",
       "Bash(node -e ' *)",
       "Bash(C:/Users/stodu/.conda/envs/nfl_env/python.exe -c \"import ast; ast.parse\\(open\\('valuehub/server.py',encoding='utf-8'\\).read\\(\\)\\); print\\('server OK'\\)\")",
-      "Bash(C:/Users/stodu/.conda/envs/nfl_env/python.exe tests/test_extension_parser.py)"
+      "Bash(C:/Users/stodu/.conda/envs/nfl_env/python.exe tests/test_extension_parser.py)",
+      "Bash(C:/Users/stodu/.conda/envs/nfl_env/python.exe -m valuehub)",
+      "Bash(echo \"servidor iniciado em background \\(PID $!\\)\")",
+      "Bash(curl -s -m 3 http://localhost:8000/api/status)",
+      "Bash(break)",
+      "Bash(curl -s -m 5 http://localhost:8000/api/status)",
+      "PowerShell($conn = Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue; if \\($conn\\) { $procId = $conn.OwningProcess | Select-Object -First 1; Write-Output \"Parando PID $procId \\($\\(\\(Get-Process -Id $procId\\).ProcessName\\)\\)\"; Stop-Process -Id $procId -Force; Start-Sleep -Milliseconds 500; if \\(Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue\\) { Write-Output \"ainda em uso\" } else { Write-Output \"porta 8000 liberada\" } } else { Write-Output \"nada escutando na 8000\" })",
+      "Bash(cd \"/c/Users/stodu/OneDrive/Área de Trabalho/ValueHub2.0\"; echo \"=== .env \\(mascarado\\) ===\"; sed -E 's/\\(=.{4}\\).*/\\\\1****/' .env 2>/dev/null; echo \"=== config: API/books/odds ===\"; grep -nE \"API_KEY|ODDS_API|TARGET_BOOKS|POLL_INTERVAL|the-odds|THEODDS|_URL|BASE.*odds|value.bets|bet365|Bet365\" valuehub/config.py | head -25; echo \"=== oddsapi.py cabecalho ===\"; head -30 valuehub/sources/../oddsapi.py 2>/dev/null || head -30 valuehub/oddsapi.py)",
+      "Bash(grep -nB2 -A8 \"def extension_status\\\\|_ext_last\\\\[\" valuehub/server.py)",
+      "Bash(grep -nA10 \"_CLUB_NOISE = {\" valuehub/matching.py)",
+      "Bash(curl -s -m 2 http://localhost:8000/api/status)",
+      "Bash(curl -s -m 5 http://localhost:8000/)",
+      "Bash(curl -s -m 8 http://localhost:8000/api/theoddsapi_sports)",
+      "Bash(C:/Users/stodu/.conda/envs/nfl_env/python.exe -c \"import ast; [ast.parse\\(open\\(f,encoding='utf-8'\\).read\\(\\)\\) for f in ['valuehub/sources/theoddsapi.py','valuehub/server.py']]; print\\('py OK'\\)\")",
+      "Bash(C:/Users/stodu/.conda/envs/nfl_env/python.exe -c \"from valuehub import config; print\\('região Bet365:', config.THE_ODDS_API_REGIONS, '| markets:', config.THE_ODDS_API_MARKETS\\)\")",
+      "Bash(\"/c/Program Files/nodejs/node.exe\" --check web/app.js)",
+      "Bash(C:/Users/stodu/.conda/envs/nfl_env/python.exe -c \"import ast; [ast.parse\\(open\\(f,encoding='utf-8'\\).read\\(\\)\\) for f in ['valuehub/sources/theoddsapi.py','valuehub/server.py','valuehub/config.py']]; print\\('py OK'\\)\")"
     ]
   }
 }

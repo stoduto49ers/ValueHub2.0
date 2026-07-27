@@ -78,6 +78,12 @@ MARKET_MAP = {
     "FTPO": ("Totals", "ou"),             # Total de pontos / Total de Runs
     # --- beisebol (MLB) ---
     "HCAP": ("Spread", "hcp"),            # Handicap (run line)
+    # --- e-sports (LOL/DOTA/CS/Valorant): tudo em nível de PARTIDA, unidade=MAPAS.
+    #     H2HT já é o "Vencedor" (2 vias). FAHC "Handicap do Jogo" ("KRU -1.5") e
+    #     TSMF "Total de Mapas" ("Mais de 2.5") são os que a Pinnacle também cobre.
+    #     (Mercados de mapa/round específicos — TMPW/3642/TNXR/MXRH — ficam de fora.)
+    "FAHC": ("Spread", "hcp"),            # Handicap de mapas do jogo
+    "TSMF": ("Totals", "ou"),             # Total de mapas
 }
 
 

@@ -36,6 +36,9 @@ _CLUB_NOISE = {
     "clube", "club", "futebol", "football", "esporte", "esportivo", "esportiva",
     "associacao", "sociedade", "regatas", "recreativo",
     "team", "the", "de", "do", "da", "dos", "das", "of",
+    # e-sports: termos de organização que uma casa põe e a outra não
+    # ("Maze Gaming" vs "Maze", "MIBR Esports" vs "MIBR")
+    "gaming", "esports", "esport", "esportes", "gg", "clan", "academy",
 }
 # Siglas de estado (BR). NÃO são ruído: elas DISTINGUEM clubes homônimos
 # (Botafogo-RJ x Botafogo-SP são times diferentes). São preservadas no nome
@@ -241,11 +244,13 @@ def match_event(target: dict, candidates: list[dict],
     if len(scored) > 1 and (best_score - scored[1][0]) < margem:
         return None
         
-    # Se passou sem ambiguidade e tem validação estrita de data ou horário (dentro da margem),
-    # é 100% certo que é o mesmo jogo. Sobe para 1.0 para o frontend não alertar "casamento 91%".
-    if exact_date or not sem_horario:
+    # Validação de data/horário + ausência de ambiguidade dá MUITA confiança —
+    # mas NÃO torna um nome fraco "100% certo" (ex.: "Fnatic" vs "Fnatic Rising"
+    # no mesmo dia). Só subimos para 1.0 quando o NOME já é forte (>=0.9); nomes
+    # fracos mantêm o score real para o painel seguir alertando "casamento X%".
+    if (exact_date or not sem_horario) and best_score >= 0.90:
         best_score = 1.0
-        
+
     return {"event": best, "score": round(best_score, 4)}
 
 

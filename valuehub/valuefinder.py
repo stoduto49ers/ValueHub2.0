@@ -64,10 +64,16 @@ def group_fair_by_event(fair_rows: list[dict]) -> dict[str, dict]:
 
     events: dict[str, dict] = {}
     for sig, ev in raw.items():
+        # E-SPORTS: fair = média ponderada de várias casas (Pinnacle 50% /
+        # Polymarket 25% / casas-alvo dividem 25%). Nos demais esportes, None ->
+        # o consenso usa os pesos sharp padrão (Pinnacle domina).
+        ew = None
+        if config.ESPORTS_CONSENSUS_ENABLED and ev.get("sport") == config.ESPORTS_SPORT_NAME:
+            ew = consensus.esports_weights(ev["sources"])
         lines = {}
         for (market, line, side), entries in ev["keys"].items():
             is_prop = market.startswith("Prop:")
-            c = consensus.combine_side(entries, is_prop)
+            c = consensus.combine_side(entries, is_prop, weights=ew)
             if not c:
                 continue
             lines[(market, line, side)] = {
@@ -84,6 +90,56 @@ def group_fair_by_event(fair_rows: list[dict]) -> dict[str, dict]:
             "sources": sorted(ev["sources"]), "lines": lines,
         }
     return events
+
+
+def contribute_book_to_consensus(offered: list[dict], fair_event: dict, source: str) -> int:
+    """E-SPORTS: de-viga (Shin) as linhas oferecidas de UMA casa-alvo e grava
+    como fair_lines (source=<casa>), usando os NOMES CANÔNICOS do evento sharp
+    já casado — assim elas se agrupam com a Pinnacle no consenso ponderado.
+
+    É o que permite a fair de e-sports ser a média Pinnacle 50% / Polymarket 25%
+    / casas-alvo 25%. Roda SÓ para e-sports; nos demais esportes não faz nada
+    (a fair segue vindo só das sharps). Precisa dos DOIS lados para de-vigar."""
+    if not (config.ESPORTS_CONSENSUS_ENABLED
+            and fair_event.get("sport") == config.ESPORTS_SPORT_NAME):
+        return 0
+    home = fair_event.get("home") or fair_event.get("event_home") or ""
+    away = fair_event.get("away") or fair_event.get("event_away") or ""
+    start = fair_event.get("start") or ""
+    league = fair_event.get("league") or ""
+    groups: dict[tuple, dict] = defaultdict(dict)
+    for o in offered:
+        odd = o.get("odd")
+        if not odd or odd <= 1.0:
+            continue
+        groups[(o["market"], o.get("line"))][o["side"]] = odd
+    sig = (f"{matching.normalize_team(home)}|{matching.normalize_team(away)}"
+           f"|{(start or '')[:10]}")
+    now = db.utcnow()
+    lines = []
+    for (market, line), sides in groups.items():
+        odds = list(sides.values())
+        if len(odds) < 2:            # sem os dois lados não há como de-vigar
+            continue
+        try:
+            probs = core.fair_probabilities(odds, method=config.DEVIG_METHOD)
+        except Exception:
+            continue
+        for (n, raw), p in zip(sides.items(), probs):
+            if not (0.0 < p < 1.0):
+                continue
+            lines.append({
+                "id": f"{source}|{sig}|{market}|{line}|{n}", "source": source,
+                "sport": config.ESPORTS_SPORT_NAME, "league": league,
+                "event_home": home, "event_away": away, "event_date": start,
+                "matchup_id": sig, "market_key": None, "market": market,
+                "line": line, "side": n, "period": 0, "player": None,
+                "raw_odd": raw, "fair_odd": round(core.prob_to_odd(p), 4),
+                "fair_prob": round(p, 6), "max_limit": None, "updated_at": now,
+            })
+    if lines:
+        db.upsert_fair_lines(lines)
+    return len(lines)
 
 
 def _line_key(market: str, line, side: str):
@@ -140,7 +196,10 @@ def evaluate_event(target_event: dict, offered: list[dict],
         if edge < required:
             continue
 
-        sizing = core.kelly_stake_cfg(fair_prob, odd, config)
+        # stake também usa a odd LÍQUIDA (net_odd) — a que você realmente recebe
+        # após a taxa da casa (ex.: 2% da Polymarket). offered_odd (exibido)
+        # segue a odd cheia; edge e stake usam a líquida.
+        sizing = core.kelly_stake_cfg(fair_prob, eval_odd, config)
         if sizing["stake_units"] <= 0:
             continue
 
@@ -288,6 +347,35 @@ class ValueFinder:
                 "linhas_ofertadas": len(offered), "props_ofertados": len(props),
                 "linhas_comparadas": comparadas[0], "novas": novas}
 
+    async def cross_theoddsapi(self, events: list[dict]) -> dict:
+        """Cruza eventos da the-odds-api (Bet365 crua) contra a Pinnacle. É o
+        pull SOB DEMANDA — chamado pelo endpoint /api/pull_bet365, não pelo loop."""
+        fair_events, candidates = self._fair_index()
+        casados = 0
+        comparadas = [0]
+        novas = 0
+        near: list[dict] = []
+        for ev in events:
+            alvo = {"home": ev["home"], "away": ev["away"], "start": ev.get("start")}
+            m = matching.match_event(
+                alvo, candidates, max_minutes=config.MATCH_MAX_MINUTES,
+                min_score=config.MATCH_MIN_SCORE,
+                min_side_score=config.MATCH_MIN_SIDE_SCORE)
+            if not m:
+                continue
+            casados += 1
+            fair_event = fair_events[m["event"]["matchup_id"]]
+            opps = evaluate_event(alvo, ev["offered"], fair_event, m["score"],
+                                  near_out=near, comparadas=comparadas)
+            for o in opps:
+                if db.upsert_opportunity(o):
+                    novas += 1
+        if near:
+            near.sort(key=lambda x: -x["edge_pct"])
+            self.near_misses = (near + self.near_misses)[:25]
+        return {"eventos": len(events), "casados": casados,
+                "comparadas": comparadas[0], "novas": novas}
+
     # ---------------------------------------------------------- player props
     def _parse_props(self, snapshot: dict, meta: dict) -> list[dict]:
         """Extrai player props do snapshot (mercados cujo nome indica jogador)."""
@@ -409,6 +497,10 @@ class ValueFinder:
                     log.exception("erro no detalhe do evento da casa")
                     continue
                 stats["linhas_ofertadas"] += len(offered)
+
+                # e-sports: alimenta o consenso com a Betano de-vigada (entra na
+                # fair no próximo ciclo; edge medido fica conservador)
+                contribute_book_to_consensus(offered, fair_event, self.target.name)
 
                 opps = evaluate_event(alvo, offered, fair_event, m["score"],
                                       near_out=near, comparadas=comparadas)
