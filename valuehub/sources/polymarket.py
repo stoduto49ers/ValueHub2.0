@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 
 import requests
 
-from .. import core, matching
+from .. import config, core, matching
 from ..valuefinder import evaluate_event, contribute_book_to_consensus
 
 log = logging.getLogger("valuehub.polymarket")
@@ -42,6 +42,23 @@ def _dns_override(host: str, ip: str):
         yield
     finally:
         socket.getaddrinfo = orig
+
+
+# prefixo do JOGO que a Polymarket cola no título de e-sports ("Counter-Strike: ",
+# "Dota 2: ", "LoL: "...) e sufixo de formato/liga ("(BO3) - LCK ...") — ambos
+# poluíam o nome do time e derrubavam o casamento p/ ~82%. Limpar resolve todos.
+_POLY_GAME_PREFIX = re.compile(
+    r"^\s*(counter[-\s]?strike|cs\s*2?|dota\s*2?|lol|league of legends|valorant|val|"
+    r"rainbow six|r6|overwatch|ow2?|mobile legends|mlbb|king of glory|starcraft\s*2?|"
+    r"rocket league)\s*:\s*", re.I)
+_POLY_FORMAT_SUFFIX = re.compile(r"\s*\(bo\s*\d+\).*$", re.I)
+
+
+def _clean_poly_title(title: str) -> str:
+    t = (title or "").replace(" - More Markets", "")
+    t = _POLY_GAME_PREFIX.sub("", t)      # tira "Counter-Strike: " etc.
+    t = _POLY_FORMAT_SUFFIX.sub("", t)    # tira " (BO3) - LCK ..."
+    return t.strip()
 
 
 def _side_of(name: str, home: str, away: str,
@@ -139,7 +156,7 @@ class PolymarketSource:
             if not mkts:
                 continue
             
-            title = ev.get('title', '').replace(" - More Markets", "").strip()
+            title = _clean_poly_title(ev.get('title', ''))
             if " vs. " in title:
                 parts = title.split(" vs. ")
             elif " vs " in title:
@@ -204,7 +221,22 @@ class PolymarketSource:
                     
                 question = mkt.get("question", "")
                 group = mkt.get("groupItemTitle", "")
-                
+
+                # CONFIANÇA DO PREÇO: o campo `spread` é o bid-ask. Largo = preço
+                # não confiável (mercado raso). PULA o mercado inteiro se passar do
+                # teto — evita handicaps/overs da Poly com preço lixo virarem valor.
+                try:
+                    bidask = float(mkt.get("spread")) if mkt.get("spread") is not None else None
+                except (ValueError, TypeError):
+                    bidask = None
+                if bidask is not None and bidask > config.POLY_MAX_BIDASK_SPREAD:
+                    continue
+                # liquidez ($) do book -> pondera o peso da Poly no consenso de e-sports
+                try:
+                    mkt_liq = float(mkt.get("liquidityNum") or mkt.get("liquidity") or 0)
+                except (ValueError, TypeError):
+                    mkt_liq = 0.0
+
                 # 1. Yes/No Markets (mostly ML)
                 if "Yes" in mkt_outcomes and "No" in mkt_outcomes:
                     idx = mkt_outcomes.index("Yes")
@@ -243,7 +275,7 @@ class PolymarketSource:
                     if side:
                         offered.append({
                             "book": self.book, "event_id": str(ev["id"]),
-                            "market": "ML", "line": None, "side": side, "odd": odd, "net_odd": net_odd,
+                            "market": "ML", "line": None, "side": side, "odd": odd, "net_odd": net_odd, "liq": mkt_liq,
                             "url": f"https://polymarket.com/event/{ev.get('slug')}"
                         })
                     continue
@@ -375,7 +407,7 @@ class PolymarketSource:
                         if side:
                             offered.append({
                                 "book": self.book, "event_id": str(ev["id"]),
-                                "market": market, "line": line, "side": side, "odd": odd, "net_odd": net_odd,
+                                "market": market, "line": line, "side": side, "odd": odd, "net_odd": net_odd, "liq": mkt_liq,
                                 "url": f"https://polymarket.com/event/{ev.get('slug')}"
                             })
             

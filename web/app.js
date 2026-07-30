@@ -86,12 +86,22 @@ async function refreshStatus() {
     }
     const tg = p.targets || {};
     if (tg.enabled) {
-      const s = tg.stats || {};
-      if (tg.last_error) parts.push(`Betano: ${tg.last_error}`);
-      else if (!tg.runs) parts.push("Betano: aguardando 1ª rodada…");
-      else parts.push(`Betano: ${s.casados ?? 0} jogos casados · ${s.oportunidades ?? 0} com valor`);
+      const st = tg.stats || {};
+      if (tg.last_error) parts.push(`casas: ${tg.last_error}`);
+      else if (!tg.runs) parts.push("casas: aguardando 1ª rodada…");
+      else {
+        // resumo da última varredura de CADA casa (Betano, EstrelaBet,
+        // Betnacional, Polymarket, Props) — não só a Betano.
+        const casas = Object.values(st.por_casa || {});
+        if (casas.length) {
+          parts.push(casas.map((c) => c.erro
+            ? `${c.book}: ⚠️`
+            : `${c.book} ${c.casados ?? 0}✓${c.opps ? "·" + c.opps + "v" : ""}`).join(" · "));
+        } else {
+          parts.push(`casas: ${st.casados ?? 0} casados · ${st.oportunidades ?? 0} com valor`);
+        }
+      }
     }
-    if (p.api_key_set) parts.push(`odds-api: ${p.books_active.join(", ") || "—"}`);
 
     // indicador da extensão (Bet365/Betano) — ajuda a ver se está capturando
     try {
@@ -139,16 +149,79 @@ function sharpBadge(o) {
     style="color:var(--accent)">✓ ${n} sharps</span>`;
 }
 
-/* quantas outras linhas correlacionadas (mesmo jogo+mercado+lado) foram
-   colapsadas nesta. Alerta de que NÃO se deve apostar em várias. */
-function familyNote(o) {
-  const n = (o.family_count || 1) - 1;
+/* ESCADINHA: outras LINHAS do mesmo mercado/lado (p/ dividir a aposta). */
+function linesNote(o) {
+  const n = (o.lines_count || 1) - 1;
   if (n < 1) return "";
-  // clicável: expande as outras linhas do mesmo mercado para você escolher
-  return `<div class="ev-sub fam-toggle" data-id="${esc(o.id)}" role="button" tabindex="0"
-    title="clique para ver as outras linhas deste mercado e escolher uma"
+  return `<div class="ev-sub fam-toggle" data-id="${esc(o.id)}" data-kind="lines" role="button" tabindex="0"
+    title="clique para ver as outras linhas deste mercado e dividir a aposta"
     style="color:var(--warn);cursor:pointer;text-decoration:underline dotted">
-    +${n} linha${n > 1 ? "s" : ""} correlacionada${n > 1 ? "s" : ""} ▾</div>`;
+    +${n} linha${n > 1 ? "s" : ""} (escadinha) ▾</div>`;
+}
+
+/* CASAS: outras casas com valor nesta mesma aposta. Só quando ≥2 casas. */
+function booksNote(o) {
+  const n = (o.books_count || 1) - 1;
+  if (n < 1) return "";
+  return `<div class="ev-sub fam-toggle" data-id="${esc(o.id)}" data-kind="books" role="button" tabindex="0"
+    title="clique para ver esta aposta em todas as casas com valor (se a indicada estiver sem saldo)"
+    style="color:var(--accent2);cursor:pointer;text-decoration:underline dotted">
+    +${n} casa${n > 1 ? "s" : ""} com valor ▾</div>`;
+}
+
+/* HTML da escadinha (linhas do mesmo mercado/lado, com rateio/dutching) */
+function linesExpandHtml(rows, cols) {
+  const linhas = rows.map((o) => {
+    const line = o.hdp != null ? `${o.hdp > 0 && o.market !== "Totals" ? "+" : ""}${o.hdp}` : "—";
+    const placed = state.betPlaced.has(o.id);
+    return `<div class="fam-line" data-id="${esc(o.id)}" data-side="${esc(o.side)}"
+         data-line="${esc(line)}" data-odd="${o.offered_odd}" data-stake="${o.stake_units}">
+      <input type="checkbox" class="fam-pick" title="marque para incluir no rateio de stake">
+      <span class="mkt-side" style="min-width:90px">${esc(o.side)} ${line}</span>
+      <span class="ev-sub" style="min-width:74px">${esc(o.book)}</span>
+      <span>odd <b class="odd-cell">${fmtOdd(o.offered_odd, o.book)}</b></span>
+      <span class="fair-cell">fair ${fmtOdd(o.fair_odd)}</span>
+      ${edgeBadge(o)}
+      <span class="stake">${o.stake_units}u <small>(${fmtBRL(o.stake_amount)})</small></span>
+      <button class="act bet" data-id="${esc(o.id)}" ${placed ? "disabled" : ""}>${placed ? "✓ registrada" : "Apostar"}</button>
+      ${o.direct_link ? `<a class="act link" href="${esc(o.direct_link)}" target="_blank" rel="noopener">Link</a>` : ""}
+      <button class="act parlay-add" data-id="${esc(o.id)}" data-odd="${o.offered_odd}"
+        data-label="${esc(`${o.event_home} ${o.market} ${o.side} ${line}`)}" type="button"
+        title="adicionar/remover esta linha da dupla">🔗</button>
+    </div>`;
+  }).join("");
+  return `<td colspan="${cols}"><div class="fam-box">
+    <div class="ev-sub" style="margin-bottom:6px">Linhas de <b>${esc(rows[0].market)}</b> · <span class="mkt-side">${esc(rows[0].side)}</span> — escolha a que preferir, ou marque 2+ para dividir a aposta:</div>
+    ${linhas}
+    <div class="fam-split">
+      <span class="ev-sub">Rateio (2+ linhas): dividir</span>
+      <input type="number" class="fam-total" step="0.25" min="0.25" placeholder="auto"> u
+      <button class="act win fam-split-btn" type="button">Sugerir divisão</button>
+      <span class="ev-sub">— mais peso na linha mais segura (odd menor), para cobrir; as maiores dão o lucro.</span>
+      <div class="fam-split-out"></div>
+    </div></div></td>`;
+}
+
+/* HTML do dropdown de casas (mesma aposta em cada casa com valor) */
+function booksExpandHtml(rows, cols) {
+  const casas = rows.map((o) => {
+    const line = o.hdp != null ? `${o.hdp > 0 && o.market !== "Totals" ? "+" : ""}${o.hdp}` : "";
+    const placed = state.betPlaced.has(o.id);
+    return `<div class="fam-line" data-id="${esc(o.id)}">
+      <span class="mkt-side" style="min-width:110px">${esc(o.book)}</span>
+      <span class="ev-sub" style="min-width:64px">${esc(o.side)} ${line}</span>
+      <span>odd <b class="odd-cell">${fmtOdd(o.offered_odd, o.book)}</b></span>
+      <span class="fair-cell">fair ${fmtOdd(o.fair_odd)}</span>
+      ${edgeBadge(o)}
+      <span class="stake">${o.stake_units}u <small>(${fmtBRL(o.stake_amount)})</small></span>
+      <span class="ev-sub">lim ${o.max_limit != null ? "€" + o.max_limit : "—"}</span>
+      <button class="act bet" data-id="${esc(o.id)}" ${placed ? "disabled" : ""}>${placed ? "✓ registrada" : "Apostar"}</button>
+      ${o.direct_link ? `<a class="act link" href="${esc(o.direct_link)}" target="_blank" rel="noopener">Link</a>` : ""}
+    </div>`;
+  }).join("");
+  return `<td colspan="${cols}"><div class="fam-box">
+    <div class="ev-sub" style="margin-bottom:6px"><b>${esc(rows[0].market)}</b> <span class="mkt-side">${esc(rows[0].side)}</span> · ${esc(rows[0].event_home)} × ${esc(rows[0].event_away)} — mesma aposta em cada casa com valor (aposte em UMA):</div>
+    ${casas}</div></td>`;
 }
 
 /* mostra na barra de contagem que o auto-refresh está pausado (expansão aberta) */
@@ -168,22 +241,24 @@ function wireFamilyToggles() {
 let familyLoading = false;
 async function toggleFamily(el) {
   const tr = el.closest("tr");
+  const kind = el.dataset.kind || "lines";     // "lines" (escadinha) | "books" (casas)
   const next = tr.nextElementSibling;
-  // já aberta NESTA linha? então o clique é um "fechar".
+  // já aberta NESTA linha? clique no MESMO tipo fecha; em outro tipo, troca.
   if (next && next.classList.contains("family-expand")) {
+    const same = next.dataset.kind === kind;
     next.remove();
     state.frozen = false;
     updateFreezeHint();
-    return;
+    if (same) return;
   }
   if (familyLoading) return;               // ignora cliques enquanto carrega (evita abrir repetido)
-  // política de UMA expansão por vez: fecha qualquer outra antes de abrir
   document.querySelectorAll("#oppBody .family-expand").forEach((e) => e.remove());
   state.frozen = true;                      // congela JÁ (ANTES do fetch), senão o refresh duplica/fecha
   updateFreezeHint();
   familyLoading = true;
+  const endpoint = kind === "books" ? "/api/opportunity_books" : "/api/opportunity_family";
   let data;
-  try { data = await jget(`/api/opportunity_family?id=${encodeURIComponent(el.dataset.id)}`); }
+  try { data = await jget(`${endpoint}?id=${encodeURIComponent(el.dataset.id)}`); }
   catch (_) { familyLoading = false; state.frozen = false; updateFreezeHint(); return; }
   familyLoading = false;
   const rows = data.rows || [];
@@ -191,39 +266,15 @@ async function toggleFamily(el) {
   // guarda extra: se um clique-duplo já criou a expansão, não cria outra
   if (tr.nextElementSibling && tr.nextElementSibling.classList.contains("family-expand")) return;
   const cols = tr.children.length;
-  const linhas = rows.map((o) => {
-    const line = o.hdp != null ? `${o.hdp > 0 && o.market !== "Totals" ? "+" : ""}${o.hdp}` : "—";
-    const placed = state.betPlaced.has(o.id);
-    return `<div class="fam-line" data-id="${esc(o.id)}" data-side="${esc(o.side)}"
-         data-line="${esc(line)}" data-odd="${o.offered_odd}" data-stake="${o.stake_units}">
-      <input type="checkbox" class="fam-pick" title="marque para incluir no rateio de stake">
-      <span class="mkt-side" style="min-width:90px">${esc(o.side)} ${line}</span>
-      <span>odd <b class="odd-cell">${fmtOdd(o.offered_odd, o.book)}</b></span>
-      <span class="fair-cell">fair ${fmtOdd(o.fair_odd)}</span>
-      ${edgeBadge(o)}
-      <span class="stake">${o.stake_units}u <small>(${fmtBRL(o.stake_amount)})</small></span>
-      <button class="act bet" data-id="${esc(o.id)}" ${placed ? "disabled" : ""}>${placed ? "✓ registrada" : "Apostar"}</button>
-      ${o.direct_link ? `<a class="act link" href="${esc(o.direct_link)}" target="_blank" rel="noopener">Link</a>` : ""}
-      <button class="act parlay-add" data-id="${esc(o.id)}" data-odd="${o.offered_odd}"
-        data-label="${esc(`${o.event_home} ${o.market} ${o.side} ${line}`)}" type="button"
-        title="adicionar/remover esta linha da dupla">🔗</button>
-    </div>`;
-  }).join("");
   const exp = document.createElement("tr");
   exp.className = "family-expand";
-  exp.innerHTML = `<td colspan="${cols}"><div class="fam-box">
-    <div class="ev-sub" style="margin-bottom:6px">Linhas de <b>${esc(rows[0].market)}</b> · <span class="mkt-side">${esc(rows[0].side)}</span> — escolha a que preferir (edge maior = melhor, mas a linha importa):</div>
-    ${linhas}
-    <div class="fam-split">
-      <span class="ev-sub">Rateio (2+ linhas): dividir</span>
-      <input type="number" class="fam-total" step="0.25" min="0.25" placeholder="auto"> u
-      <button class="act win fam-split-btn" type="button">Sugerir divisão</button>
-      <span class="ev-sub">— mais peso na linha mais segura (odd menor), para cobrir; as maiores dão o lucro.</span>
-      <div class="fam-split-out"></div>
-    </div></div></td>`;
+  exp.dataset.kind = kind;
+  exp.innerHTML = kind === "books" ? booksExpandHtml(rows, cols) : linesExpandHtml(rows, cols);
   tr.after(exp);
   exp.querySelectorAll(".act.bet").forEach((b) =>
     b.addEventListener("click", () => placeBet(b.dataset.id, b)));
+  if (kind === "books") return;             // casas: só apostar (sem rateio/dupla)
+  // escadinha: rateio (dutching) + dupla
   exp.querySelectorAll(".parlay-add").forEach((b) =>
     b.addEventListener("click", () => toggleParlayLeg(b.dataset.id, b.dataset.label, parseFloat(b.dataset.odd))));
   markParlayButtons();
@@ -293,7 +344,7 @@ function marketLabel(o) {
 }
 
 async function refreshOpps() {
-  if (!["value", "esports", "props", "other"].includes(state.tab)) return;
+  if (!["value", "esports", "tenis", "props", "other"].includes(state.tab)) return;
   const q = new URLSearchParams({
     tab: state.tab,
     min_edge: $("fMinEdge").value || 0,
@@ -319,7 +370,7 @@ async function refreshOpps() {
       <td>${fmtKickoff(o.event_date)}</td>
       <td><div class="ev-name">${esc(o.event_home)} × ${esc(o.event_away)}</div>
           <div class="ev-sub">${esc(o.sport)} · ${esc(o.league)}${matchBadge(o)}${sharpBadge(o)}</div></td>
-      <td>${marketLabel(o)}${familyNote(o)}</td>
+      <td>${marketLabel(o)}${linesNote(o)}${booksNote(o)}</td>
       <td>${esc(o.book)}</td>
       <td class="odd-cell">${fmtOdd(o.offered_odd, o.book)}</td>
       <td class="fair-cell">${fmtOdd(o.fair_odd)}</td>
@@ -835,7 +886,7 @@ document.querySelectorAll(".tab").forEach((t) =>
     document.querySelectorAll(".tab").forEach((x) => x.classList.remove("active"));
     t.classList.add("active");
     state.tab = t.dataset.tab;
-    const opps = ["value", "esports", "props", "other"].includes(state.tab);
+    const opps = ["value", "esports", "tenis", "props", "other"].includes(state.tab);
     $("pane-opps").hidden = !opps;
     $("filtersBar").style.display = opps ? "" : "none";
     $("pane-boosts").hidden = state.tab !== "boosts";
@@ -860,54 +911,9 @@ document.querySelectorAll(".tab").forEach((t) =>
 if ($("bSport")) $("bSport").addEventListener("change", () => refreshBets());
 if ($("bTab")) $("bTab").addEventListener("change", () => refreshBets());
 
-/* -------------------------------------------- Bet365 via The-Odds-API (sob demanda) */
-async function initB365Pull() {
-  const sel = $("b365Sport"), msg = $("b365PullMsg"), card = $("b365PullCard");
-  if (!sel) return;
-  let data;
-  try { data = await jget("/api/theoddsapi_sports"); } catch (_) { return; }
-  if (!data.configured) {
-    if (card) card.style.opacity = "0.6";
-    msg.innerHTML = `<span class="neg">sem chave — ponha THE_ODDS_API_KEY no .env</span>`;
-    return;
-  }
-  const sports = data.sports || [];
-  sel.innerHTML = `<option value="">— escolher esporte —</option>` +
-    sports.map((s) => `<option value="${esc(s.key)}">${esc(s.group ? s.group + " · " : "")}${esc(s.title)}</option>`).join("");
-  msg.innerHTML = data.error
-    ? `<span class="neg">${esc(data.error)}</span>`
-    : `${sports.length} esportes` + (data.remaining != null ? ` · <b>${esc(data.remaining)}</b> créditos restantes` : "");
-}
-
-if ($("b365Pull")) $("b365Pull").addEventListener("click", async () => {
-  const btn = $("b365Pull"), sel = $("b365Sport"), msg = $("b365PullMsg");
-  const sport_key = sel.value;
-  if (!sport_key) { msg.innerHTML = `<span class="neg">escolha um esporte primeiro</span>`; return; }
-  btn.disabled = true; msg.textContent = "puxando (1 crédito por mercado)…";
-  try {
-    const r = await jpost("/api/pull_bet365", { sport_key });
-    let hint = "";
-    if (r.com_book === 0) {
-      if (r.raw_events > 0) {
-        const casas = (r.available_books || []).join(", ") || "(nenhuma)";
-        hint = ` <span class="neg">— "${esc(r.book)}" NÃO existe na the-odds-api. ${r.raw_events} jogos com estas casas: ${esc(casas)}. Ajuste THE_ODDS_API_BOOKMAKER para uma delas.</span>`;
-      } else {
-        hint = ` <span class="ev-sub">— sem jogos nessa liga agora</span>`;
-      }
-    } else if (r.casados === 0) {
-      hint = ` <span class="ev-sub">— ${r.com_book} jogos com "${esc(r.book)}", mas nenhum casou com a Pinnacle</span>`;
-    }
-    msg.innerHTML = `✅ ${r.com_book} jogos c/ ${esc(r.book)} · ${r.casados} casados · <b class="pos">${r.novas} novas</b>` +
-      (r.remaining != null ? ` · <b>${esc(r.remaining)}</b> créditos` : "") + hint;
-    if (["value", "props", "other"].includes(state.tab)) refreshOpps();
-  } catch (e) { msg.innerHTML = `<span class="neg">erro: ${esc(e.message)}</span>`; }
-  finally { btn.disabled = false; }
-});
-
 /* ------------------------------------------------------------------ loop */
 refreshStatus();
 refreshOpps();
-initB365Pull();
 setInterval(refreshStatus, 10_000);
 setInterval(() => {
   // enquanto uma expansão está aberta, NÃO recarrega a lista (senão fecha a

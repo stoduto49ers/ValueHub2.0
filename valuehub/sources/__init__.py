@@ -8,3 +8,9 @@ de-vigadas que servem de referência de probabilidade justa. Cada fonte alvo
 Fontes sharp:  pinnacle  (+ fanduel/consenso no futuro)
 Fontes alvo:   extensão Chrome hoje; scrapers próprios depois.
 """
+
+from .betano import BetanoSource
+from .estrelabet import EstrelaBetSource
+from .betnacional import BetnacionalSource
+from .pinnacle import PinnacleSource
+from .polymarket import PolymarketSource

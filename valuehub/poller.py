@@ -20,6 +20,9 @@ import time
 from . import config, db, engine
 from .oddsapi import OddsApiClient
 from .sources.betano import BetanoSource
+from .sources.estrelabet import EstrelaBetSource
+from .sources.betnacional import BetnacionalSource
+from .sources.betmgm import BetMGMSource
 from .sources.fanduel import extract_prop_fair_lines
 from .sources.pinnacle import PinnacleSource
 from .sources.polymarket import PolymarketSource
@@ -33,8 +36,16 @@ class Poller:
         self.client = OddsApiClient()
         self.pinnacle = PinnacleSource()
         self.betano = BetanoSource()
+        self.estrelabet = EstrelaBetSource()
+        self.betnacional = BetnacionalSource()
+        self.betmgm = BetMGMSource()
         self.polymarket = PolymarketSource()
-        self.finder = ValueFinder(self.betano)
+        # BetMGM (Kambi) só entra quando o host/offering da BR estiver configurado
+        # (o cluster público não serve o offering `betmgmbr`) — ver config.
+        targets = [self.betano, self.estrelabet, self.betnacional]
+        if config.BETMGM_ENABLED:
+            targets.append(self.betmgm)
+        self.finder = ValueFinder(targets)
         self.running = False
 
         # casas-alvo
@@ -96,12 +107,15 @@ class Poller:
             # casas-alvo (Betano) + cruzamento
             "targets": {
                 "enabled": config.BETANO_ENABLED,
-                "books": [self.betano.book, self.polymarket.book],
+                "books": [self.betano.book, self.estrelabet.book, self.betnacional.book,
+                          self.polymarket.book] + ([self.betmgm.book] if config.BETMGM_ENABLED else []),
                 "last_run_at": self.tgt_last_at,
                 "last_run_ms": self.tgt_last_ms,
                 "runs": self.tgt_runs,
-                "requests_made": self.betano.requests_made,
-                "last_error": self.betano.last_error,
+                "requests_made": (self.betano.requests_made + self.estrelabet.requests_made
+                                  + self.betnacional.requests_made + self.betmgm.requests_made),
+                "last_error": (self.betano.last_error or self.estrelabet.last_error
+                               or self.betnacional.last_error),
                 "interval_sec": config.BETANO_SWEEP_INTERVAL_SEC,
                 "stats": self.tgt_stats,
             },
@@ -170,13 +184,30 @@ class Poller:
         t0 = time.time()
         self.tgt_stats = await self.finder.run()
         
+        por_casa = self.tgt_stats.setdefault("por_casa", {})
+
         # Polymarket cross
         fair_events, candidates = self.finder._fair_index()
         poly_opps = await self.polymarket.collect_opportunities(fair_events, candidates, self.tgt_stats)
         novas = sum(1 for opp in poly_opps if db.upsert_opportunity(opp))
         self.tgt_stats["poly_novas"] = novas
+        por_casa["polymarket"] = {
+            "book": self.polymarket.book, "jogos": self.tgt_stats.get("poly_eventos", 0),
+            "casados": self.tgt_stats.get("poly_casados", 0), "opps": len(poly_opps),
+            "erro": getattr(self.polymarket, "last_error", "") or ""}
         db.deactivate_stale("Polymarket", config.STALE_AFTER_SEC)
-        
+
+        # Betano player props vs FanDuel (MLB/WNBA/NBA). Roda depois do run()
+        # (que já desativou props obsoletas da Betano); aqui repovoa as frescas.
+        try:
+            props_novas = await self.finder.cross_book_props(
+                self.betano, ["beisebol", "basquete"])
+            self.tgt_stats["props_novas"] = props_novas
+            por_casa["props"] = {"book": "Props (FanDuel)", "jogos": 0,
+                                 "casados": 0, "opps": props_novas, "erro": ""}
+        except Exception:
+            log.exception("erro no cross de props Betano")
+
         self.tgt_runs += 1
         self.tgt_last_at = time.time()
         self.tgt_last_ms = int((self.tgt_last_at - t0) * 1000)
@@ -285,3 +316,6 @@ class Poller:
         await self.client.close()
         await self.pinnacle.close()
         await self.betano.close()
+        await self.estrelabet.close()
+        await self.betnacional.close()
+        await self.betmgm.close()

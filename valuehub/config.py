@@ -39,26 +39,6 @@ def _load_api_key() -> str:
 API_KEY = _load_api_key()
 
 # ----------------------------------------------------------------------------
-# THE-ODDS-API (the-odds-api.com) — feed da BET365 SOB DEMANDA (não automático).
-# Provedor DIFERENTE da odds-api.io. Free tier: 500 requests/mês. Cada pull de
-# um esporte custa ~1 crédito POR MERCADO (h2h, spreads, totals). Puxamos as odds
-# CRUAS da Bet365 e cruzamos contra a nossa Pinnacle — só quando você clica no
-# botão do painel. Chave no .env: THE_ODDS_API_KEY=xxxx
-# ----------------------------------------------------------------------------
-THE_ODDS_API_KEY = _load_env("THE_ODDS_API_KEY")
-THE_ODDS_API_BASE = "https://api.the-odds-api.com/v4"
-# A Bet365 é britânica -> aparece na região "uk" (confirmado: na "eu" ela não
-# vinha). Se alguma liga não trouxer Bet365, dá p/ tentar "uk,eu" (dobra o custo:
-# 1 crédito por mercado POR região).
-THE_ODDS_API_REGIONS = "uk"
-THE_ODDS_API_MARKETS = "h2h,spreads,totals"  # ML / Spread / Totals
-# ATENÇÃO: a the-odds-api NÃO carrega a BET365 (omissão do provedor, confirmado:
-# 23 jogos MLB/UK, 19 casas, zero bet365). O painel mostra as casas que EXISTEM
-# quando a alvo não aparece. Coloque aqui a key de uma casa presente (ex.:
-# "betfair_ex_uk" = Betfair Exchange, um sinal SHARP forte; "williamhill"; etc.).
-THE_ODDS_API_BOOKMAKER = "bet365"
-
-# ----------------------------------------------------------------------------
 # CASAS-ALVO — uma chamada de /value-bets por casa por ciclo.
 # Free tier: máx 2 casas (hoje: Bet365 + FanDuel). Ao fazer upgrade, adicione
 # aqui os nomes EXATOS da odds-api (ex.: "Betano BR", "KTO", "Superbet",
@@ -153,6 +133,9 @@ MAJOR_LEAGUES = [
     # -- MMA / boxe: só os eventos grandes, que têm liquidez
     # -- E-Sports
     "league of legends", "valorant", "dota 2", "cs2", "cs:go",
+    # -- Tênis: ATP e WTA (o prefixo pega main tour + challenger + 125k; as
+    # linhas de baixa liquidez caem no corte por liquidez). ITF fica de fora.
+    "atp", "wta",
 ]
 ONLY_MAJOR_LEAGUES = True     # False = coleta/mostra todas as ligas
 
@@ -170,6 +153,10 @@ def is_major_league(name: str) -> bool:
 # ----------------------------------------------------------------------------
 PROPS_SPORTS = {"American Football", "Basketball", "Ice Hockey", "Baseball"}
 PROPS_MIN_EDGE_PCT = 4.0      # props têm consenso mais fraco -> exige mais edge
+# frescor máx. da linha de prop da FanDuel (min). Maior que os 15min das odds
+# regulares: a linha de prop muda pouco pré-jogo e a varredura pode estar em
+# rate limit da odds-api — melhor comparar contra a última do que não ter prop.
+PROPS_FAIR_STALE_MIN = 360
 
 # ----------------------------------------------------------------------------
 # EDGE MÍNIMO ESCALONADO POR LIQUIDEZ (campo `max` do consenso, em EUR)
@@ -241,17 +228,25 @@ SHARP_WEIGHTS_PROPS = {
 }
 
 # E-SPORTS: a Pinnacle é MENOS dominante, então a fair é uma média ponderada de
-# várias casas (todas de-vigadas por Shin). Interno — não aparece no painel.
-#   Pinnacle 50% · Polymarket 25% · casas-alvo (Betano/Bet365/...) DIVIDINDO 25%.
-# Dividir os 25% entre as casas-alvo evita que adicionar casas afogue a Pinnacle.
-# Incluir a própria casa onde se aposta é CONSERVADOR (reduz o edge medido, nunca
-# superestima). Vale SÓ p/ e-sports; nos grandes esportes a fair segue SHARP_WEIGHTS.
+# TODAS as casas (de-vigadas por Shin). Interno — não aparece no painel.
+#   Pinnacle 50% · TODAS as outras casas (Polymarket + Betano + EstrelaBet + …)
+#   DIVIDINDO os outros 50% igualmente. Sem Pinnacle no jogo, vira a média das
+#   casas (padrão quando não há sharp forte).
+# A própria casa onde se aposta ENTRA na conta (NÃO há leave-one-out): incluir a
+# própria odd só AMORTECE o edge p/ baixo (conservador), nunca superestima. E,
+# como todas as casas usam a MESMA fair, os edges ficam COMPARÁVEIS entre casas
+# (odd maior => edge maior). Vale SÓ p/ e-sports; nos grandes esportes a fair
+# segue SHARP_WEIGHTS (Pinnacle sozinha).
 ESPORTS_CONSENSUS_ENABLED = True
 ESPORTS_SPORT_NAME = "E Sports"           # como a Pinnacle nomeia o esporte (id 12)
-ESPORTS_WEIGHT_PINNACLE = 0.50
-ESPORTS_WEIGHT_POLYMARKET = 0.25
-ESPORTS_WEIGHT_SOFT_GROUP = 0.25          # dividido entre as casas-alvo presentes
-ESPORTS_SOFT_SOURCES = {"betano", "bet365"}   # casas-alvo (dividem o grupo soft)
+ESPORTS_WEIGHT_PINNACLE = 0.50            # peso da Pinnacle; as demais dividem o resto
+
+# POLYMARKET — CONFIANÇA DO PREÇO (mercados rasos têm preço ruidoso):
+# 1) PULA o mercado se o bid-ask (`spread`) passar deste teto (preço lixo).
+# 2) Pondera o peso da Poly no consenso pela liquidez ($): abaixo de POLY_FULL
+#    o peso escala linear (liq/POLY_FULL); acima, peso cheio.
+POLY_MAX_BIDASK_SPREAD = 0.15
+POLY_FULL_LIQUIDITY = 300.0
 
 # ============================================================================
 # FONTES SHARP PRÓPRIAS (infra nossa — sem custo recorrente)
@@ -277,6 +272,7 @@ PINNACLE_SPORTS = {
     "Hockey": 19,               # NHL
     "Mixed Martial Arts": 22,   # UFC
     "E Sports": 12,             # E-Sports
+    "Tennis": 33,               # ATP / WTA (filtrado por is_major_league)
 }
 
 # Só colhe jogos que começam dentro desta janela (economiza requests).
@@ -325,6 +321,29 @@ FANDUEL_SWEEP_INTERVAL_SEC = 120
 # ----------------------------------------------------------------------------
 BETANO_ENABLED = True
 BETANO_BASE = "https://www.betano.bet.br"
+
+ESTRELABET_ENABLED = True
+ESTRELABET_BASE = "https://estrelabet.com"
+
+BETNACIONAL_ENABLED = True
+BETNACIONAL_BASE = "https://betnacional.com"
+
+# ----------------------------------------------------------------------------
+# BETMGM BRASIL (motor Kambi) — API REST JSON limpa (odds/linha ×1000).
+# O host+offering são parametrizáveis. ATENÇÃO: o cluster do BRASIL (offering
+# `betmgmbr`) fica atrás de residência de dados e NÃO responde no host público
+# `eu-offering-api.kambicdn.com` (lá só resolvem betmgmuk/nl/se). Enquanto o
+# host da BR não estiver configurado, deixe BETMGM_ENABLED=False. O coletor
+# funciona idêntico contra qualquer offering Kambi — é só apontar host/offering.
+# ----------------------------------------------------------------------------
+BETMGM_ENABLED = False
+BETMGM_BASE = "https://betmgm.bet.br"
+KAMBI_HOST = "https://eu-offering-api.kambicdn.com"   # trocar p/ o cluster da BR
+KAMBI_OFFERING = "betmgmbr"                            # extApiEndpoint do cluster
+KAMBI_LANG = "pt_BR"
+KAMBI_MARKET = "BR"
+KAMBI_CLIENT_ID = 2
+
 BETANO_SWEEP_INTERVAL_SEC = 180
 BETANO_REQUEST_DELAY = 0.3
 BETANO_HORIZON_HOURS = 72
@@ -352,10 +371,13 @@ BETANO_LEAGUE_URLS = [
     #    vêm com o jogo no caminho: /sport/esports/<jogo>/<liga>/<id>/).
     #    Isso filtra fora Rainbow Six, Mobile Legends, Overwatch, King of Glory.
     "/counter-strike/", "/league-of-legends/", "/dota-2/", "/valorant/",
+    # -- TÊNIS: ATP/WTA (main tour) + Challenger (a Pinnacle cobre "ATP Challenger").
+    #    Padel/ITF ficam de fora. O casamento é por jogador+horário, não por liga.
+    "/tenis/atp/", "/tenis/wta/", "/tenis/challenger/",
 ]
 # Esportes da Betano a varrer (slug na URL deles). Cada um busca suas ligas e
 # filtra por BETANO_LEAGUE_URLS.
-BETANO_SPORTS = ["futebol", "basquete", "beisebol", "mma", "esports"]
+BETANO_SPORTS = ["futebol", "basquete", "beisebol", "mma", "esports", "tenis"]
 
 # ----------------------------------------------------------------------------
 # MERCADOS PROFUNDOS via navegador (Handicap Asiático & linhas de quarto)

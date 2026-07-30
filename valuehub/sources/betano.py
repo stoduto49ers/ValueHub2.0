@@ -84,6 +84,11 @@ MARKET_MAP = {
     #     (Mercados de mapa/round específicos — TMPW/3642/TNXR/MXRH — ficam de fora.)
     "FAHC": ("Spread", "hcp"),            # Handicap de mapas do jogo
     "TSMF": ("Totals", "ou"),             # Total de mapas
+    # --- tênis (ATP/WTA): Vencedor (2 vias, por nome) e Total de games do jogo.
+    #     O handicap (TGHC) fica de fora: é de GAMES e a Pinnacle marca games e
+    #     sets ambos como "Spread" na mesma linha (±1.5) -> casaria errado.
+    "HTOH": ("ML", "ml2"),                # Vencedor da partida
+    "FTGO": ("Totals", "ou"),             # Total de games do jogo
 }
 
 
@@ -217,6 +222,96 @@ def parse_markets(event: dict, markets: list[dict]) -> list[dict]:
     return out
 
 
+# --------------------------------------------------------------- player props
+# O jogador vem entre COLCHETES no nome do mercado, no início OU no fim:
+#   '[Peter Lambert] Strikeouts'          (MLB)
+#   'Total de Rebotes [Caitlin Clark]'    (WNBA)
+# Os mercados sem colchete (ex.: 'Natisha Hiedeman Total de pontos') são
+# ambíguos de separar (onde acaba o nome?) — IGNORADOS de propósito.
+_BRACKET_RE = re.compile(r"\[([^\]]+)\]")
+_TRAIL_PAREN_RE = re.compile(r"\s*\([^)]*\)\s*$")
+
+# stat da Betano (normalizado) -> mercado FanDuel canônico ('Prop: <stat FD>').
+# Só mapeamos os stats que a FanDuel (nossa sharp de props) também cobre.
+PROP_STAT_MAP = {
+    # MLB
+    "strikeouts": "Prop: Total Strikeouts",
+    "total de strikeouts": "Prop: Total Strikeouts",
+    # WNBA / NBA
+    "total de pontos": "Prop: Points",
+    "total de rebotes": "Prop: Rebounds",
+    "total de assistencias": "Prop: Assists",
+    "total de cestas de 3 pontos": "Prop: 3 Point FG",
+    "total de arremessos de 3 pontos convertidos": "Prop: 3 Point FG",
+    "arremessos de 3 pontos convertidos": "Prop: 3 Point FG",
+}
+
+
+def _norm_stat(s: str) -> str:
+    return " ".join(_norm_team(s).split())
+
+
+def _prop_market(name_wo_player: str) -> str | None:
+    """'Total de Rebotes' -> 'Prop: Rebounds'. Tira sufixo entre parênteses
+    (ex.: '(incl. Prorrogação)') antes de mapear. None => stat não coberto."""
+    txt = _TRAIL_PAREN_RE.sub("", name_wo_player).strip()
+    txt = re.sub(r"\s*do jogador\s*$", "", txt, flags=re.I).strip()
+    return PROP_STAT_MAP.get(_norm_stat(txt))
+
+
+def parse_props(event: dict, markets: list[dict]) -> list[dict]:
+    """Extrai as player props da Betano no formato que o cruzamento contra a
+    FanDuel espera. Deduplica (jogador, mercado, linha, lado). Função PURA.
+
+    As odds de props vêm numa TABELA aninhada: o stat sai do NOME do mercado
+    (sem o [placeholder]); cada JOGADOR é uma `row` (row.title); as odds over/
+    under ficam em row.groupSelections[].selections[] ('Mais de X'/'Menos de X',
+    handicap = linha). O `selections` plano do mercado vem vazio — ignoramos."""
+    out: list[dict] = []
+    seen: set[tuple] = set()
+    for m in markets:
+        stat_txt = _BRACKET_RE.sub("", str(m.get("name") or "")).strip()
+        market = _prop_market(stat_txt)
+        if not market:
+            continue
+        rows = (m.get("tableLayout") or {}).get("rows") or []
+        for row in rows:
+            player = str(row.get("title") or "").strip()
+            if not player:
+                continue
+            for gs in row.get("groupSelections") or []:
+                gline = _f(gs.get("line"))
+                for s in (gs.get("selections") or []):
+                    odd = _f(s.get("price"))
+                    if not odd or odd <= 1.0:
+                        continue
+                    snm = str(s.get("name") or "").lower()
+                    if "mais" in snm or "over" in snm or "acima" in snm:
+                        side = "over"
+                    elif "menos" in snm or "under" in snm or "abaixo" in snm:
+                        side = "under"
+                    else:
+                        continue          # '6+', 'Sim'... — não é over/under
+                    line = _f(s.get("handicap"))
+                    if line is None:
+                        line = gline
+                    if line is None and (mo := re.search(r"([\d.,]+)", snm)):
+                        line = _f(mo.group(1))
+                    if line is None or line == 0:
+                        continue
+                    chave = (player, market, round(line, 2), side)
+                    if chave in seen:
+                        continue
+                    seen.add(chave)
+                    out.append({
+                        "book": "Betano", "player": player, "market": market,
+                        "line": line, "side": side, "odd": odd,
+                        "event_id": str(event.get("id") or ""),
+                        "url": config.BETANO_BASE + (event.get("url") or ""),
+                    })
+    return out
+
+
 class BetanoSource:
     name = "betano"
     book = "Betano"
@@ -328,6 +423,39 @@ class BetanoSource:
         mkts = await self.event_markets(event.get("url") or "")
         await asyncio.sleep(config.BETANO_REQUEST_DELAY)
         return parse_markets(event, mkts)
+
+    # ------------------------------------------------------------ player props
+    # ligas onde buscamos props (as que a FanDuel, nossa sharp de props, cobre).
+    _PROP_LEAGUES = {"beisebol": ("MLB",), "basquete": ("WNBA", "NBA")}
+
+    async def prop_listings(self, sport: str) -> list[dict]:
+        """Jogos PRÉ-JOGO das ligas com player props (MLB/WNBA/NBA). Independe do
+        filtro de ligas das game lines — props é um alvo específico."""
+        want = self._PROP_LEAGUES.get(sport)
+        if not want:
+            return []
+        out: list[dict] = []
+        for lg in await self.leagues(sport):
+            if not any(k in (lg.get("name") or "").upper() for k in want):
+                continue
+            for ev in await self.league_events(lg["url"]):
+                if (ev.get("url") or "").startswith("/live/"):
+                    continue                 # ao vivo não traz a grade de props
+                ev.setdefault("leagueName", lg.get("name"))
+                out.append(ev)
+            await asyncio.sleep(config.BETANO_REQUEST_DELAY)
+        return out
+
+    async def fetch_event_props(self, event: dict) -> list[dict]:
+        """Player props de UM jogo -> props oferecidas (p/ cruzar com a FanDuel).
+        Usa a aba 'Jogadores' (bt=1), que é onde as odds de props carregam (a
+        aba 'Todos' só traz o cabeçalho do mercado, sem as cotações)."""
+        url = event.get("url") or ""
+        sep = "&" if "?" in url else "?"
+        d = await self._get("/api" + url + f"{sep}bt=1")
+        await asyncio.sleep(config.BETANO_REQUEST_DELAY)
+        mkts = (d.get("event") or {}).get("markets") if d else None
+        return parse_props(event, mkts or [])
 
     async def close(self):
         self.http.close()

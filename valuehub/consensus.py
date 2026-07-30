@@ -27,23 +27,16 @@ def source_weight(source: str, is_prop: bool) -> float:
 
 
 def esports_weights(sources_present) -> dict:
-    """Pesos do consenso de E-SPORTS: Pinnacle 0.50, Polymarket 0.25, e as
-    casas-alvo presentes (Betano/Bet365/...) DIVIDINDO 0.25 igualmente. Assim,
-    adicionar casas-alvo não reduz o peso da Pinnacle. Fonte sem peso definido
-    entra com 0 (não influencia)."""
-    softs = {s for s in sources_present if s in config.ESPORTS_SOFT_SOURCES}
-    per_soft = (config.ESPORTS_WEIGHT_SOFT_GROUP / len(softs)) if softs else 0.0
-    w = {}
-    for s in set(sources_present):
-        if s == "pinnacle":
-            w[s] = config.ESPORTS_WEIGHT_PINNACLE
-        elif s == "polymarket":
-            w[s] = config.ESPORTS_WEIGHT_POLYMARKET
-        elif s in config.ESPORTS_SOFT_SOURCES:
-            w[s] = per_soft
-        else:
-            w[s] = 0.0
-    return w
+    """Pesos do consenso de E-SPORTS: Pinnacle 50% e TODAS as outras casas
+    presentes (Polymarket + Betano + EstrelaBet + …) DIVIDINDO os outros 50%
+    igualmente. A própria casa da aposta entra na conta (sem leave-one-out) — só
+    amortece o edge p/ baixo. Sem Pinnacle no jogo, as casas dividem tudo
+    (combine_side renormaliza) = média das casas."""
+    srcs = set(sources_present)
+    outras = [s for s in srcs if s != "pinnacle"]
+    por_outra = ((1.0 - config.ESPORTS_WEIGHT_PINNACLE) / len(outras)) if outras else 0.0
+    return {s: (config.ESPORTS_WEIGHT_PINNACLE if s == "pinnacle" else por_outra)
+            for s in srcs}
 
 
 def combine_side(entries: list[dict], is_prop: bool, weights: dict | None = None) -> dict | None:
@@ -63,6 +56,11 @@ def combine_side(entries: list[dict], is_prop: bool, weights: dict | None = None
             continue
         src = e.get("source", "")
         w = weights.get(src, 0.0) if weights is not None else source_weight(src, is_prop)
+        # POLYMARKET por LIQUIDEZ: mercado raso pesa menos (o preço é ruidoso).
+        # max_limit da entrada Poly guarda a liquidez ($) do book naquele mercado.
+        if src == "polymarket" and e.get("max_limit") is not None:
+            liq = e.get("max_limit") or 0.0
+            w *= min(1.0, liq / config.POLY_FULL_LIQUIDITY)
         if w <= 0:
             continue
         num += w * p

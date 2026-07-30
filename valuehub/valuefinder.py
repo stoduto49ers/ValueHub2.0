@@ -25,6 +25,9 @@ from . import config, consensus, core, db, matching
 
 log = logging.getLogger("valuehub.valuefinder")
 
+# esporte (como a Pinnacle nomeia) -> aba do painel
+_TAB_BY_SPORT = {"E Sports": "esports", "Tennis": "tenis"}
+
 
 def _event_sig(row: dict) -> str:
     """Assinatura canônica de um jogo, para juntar a MESMA partida vinda de
@@ -93,13 +96,11 @@ def group_fair_by_event(fair_rows: list[dict]) -> dict[str, dict]:
 
 
 def contribute_book_to_consensus(offered: list[dict], fair_event: dict, source: str) -> int:
-    """E-SPORTS: de-viga (Shin) as linhas oferecidas de UMA casa-alvo e grava
-    como fair_lines (source=<casa>), usando os NOMES CANÔNICOS do evento sharp
-    já casado — assim elas se agrupam com a Pinnacle no consenso ponderado.
-
-    É o que permite a fair de e-sports ser a média Pinnacle 50% / Polymarket 25%
-    / casas-alvo 25%. Roda SÓ para e-sports; nos demais esportes não faz nada
-    (a fair segue vindo só das sharps). Precisa dos DOIS lados para de-vigar."""
+    """E-SPORTS: de-viga (Shin) as linhas oferecidas de UMA casa e grava como
+    fair_lines (source=<casa>), usando os NOMES CANÔNICOS do evento sharp já
+    casado — assim se agrupam com a Pinnacle no consenso ponderado (Pinnacle 50%
+    / demais casas 50%). TODAS as casas entram (incl. a própria onde se aposta);
+    sem leave-one-out. Roda SÓ p/ e-sports. Precisa dos DOIS lados p/ de-vigar."""
     if not (config.ESPORTS_CONSENSUS_ENABLED
             and fair_event.get("sport") == config.ESPORTS_SPORT_NAME):
         return 0
@@ -108,16 +109,27 @@ def contribute_book_to_consensus(offered: list[dict], fair_event: dict, source: 
     start = fair_event.get("start") or ""
     league = fair_event.get("league") or ""
     groups: dict[tuple, dict] = defaultdict(dict)
+    liqs: dict[tuple, float] = {}          # liquidez por mercado (p/ ponderar Poly)
     for o in offered:
         odd = o.get("odd")
         if not odd or odd <= 1.0:
             continue
-        groups[(o["market"], o.get("line"))][o["side"]] = odd
+        market, line, side = o["market"], o.get("line"), o["side"]
+        # SPREAD: os dois lados complementares são home@-L e away@+L (não @-L).
+        # Agrupamos pela linha na PERSPECTIVA DO MANDANTE — senão de-vigaríamos
+        # 'home 2-0' contra 'away 2-0' (que não somam 1) e inflaria os DOIS
+        # lados, criando falso valor em ambos. É como a Pinnacle pareia.
+        gline = (-line if (side == "away" and market.startswith("Spread")
+                           and line is not None) else line)
+        key = (market, gline)
+        groups[key][side] = odd
+        if o.get("liq") is not None:
+            liqs[key] = o["liq"]
     sig = (f"{matching.normalize_team(home)}|{matching.normalize_team(away)}"
            f"|{(start or '')[:10]}")
     now = db.utcnow()
     lines = []
-    for (market, line), sides in groups.items():
+    for (market, gline), sides in groups.items():
         odds = list(sides.values())
         if len(odds) < 2:            # sem os dois lados não há como de-vigar
             continue
@@ -128,14 +140,19 @@ def contribute_book_to_consensus(offered: list[dict], fair_event: dict, source: 
         for (n, raw), p in zip(sides.items(), probs):
             if not (0.0 < p < 1.0):
                 continue
+            # linha REAL do lado (away é o espelho da linha do mandante)
+            side_line = (-gline if (n == "away" and market.startswith("Spread")
+                                    and gline is not None) else gline)
             lines.append({
-                "id": f"{source}|{sig}|{market}|{line}|{n}", "source": source,
+                "id": f"{source}|{sig}|{market}|{side_line}|{n}", "source": source,
                 "sport": config.ESPORTS_SPORT_NAME, "league": league,
                 "event_home": home, "event_away": away, "event_date": start,
                 "matchup_id": sig, "market_key": None, "market": market,
-                "line": line, "side": n, "period": 0, "player": None,
+                "line": side_line, "side": n, "period": 0, "player": None,
                 "raw_odd": raw, "fair_odd": round(core.prob_to_odd(p), 4),
-                "fair_prob": round(p, 6), "max_limit": None, "updated_at": now,
+                "fair_prob": round(p, 6),
+                # liquidez da casa neste mercado -> pondera o peso no consenso
+                "max_limit": liqs.get((market, gline)), "updated_at": now,
             })
     if lines:
         db.upsert_fair_lines(lines)
@@ -208,7 +225,8 @@ def evaluate_event(target_event: dict, offered: list[dict],
                   f"{line}|{off['side']}")
         out.append({
             "id": opp_id,
-            "tab": "esports" if fair_event.get("sport") == "E Sports" else "value",
+            "matchup_id": fair_event.get("matchup_id"),
+            "tab": _TAB_BY_SPORT.get(fair_event.get("sport"), "value"),
             "suspicious": 1 if edge > config.EDGE_SANITY_MAX_PCT else 0,
             "sport": fair_event.get("sport") or "",
             "league": fair_event.get("league") or off.get("league") or "",
@@ -249,8 +267,8 @@ def _min_edge_for(max_limit) -> float:
 class ValueFinder:
     """Orquestra: listagens da casa -> casamento -> detalhe -> valor."""
 
-    def __init__(self, target_source):
-        self.target = target_source
+    def __init__(self, targets: list):
+        self.targets = targets
         self.last_stats: dict = {}
         # melhores linhas do ciclo, mesmo abaixo do corte. Servem para (a) provar
         # que o sistema está vivo quando não há valor e (b) calibrar os cortes.
@@ -274,9 +292,13 @@ class ValueFinder:
         event_id = str(snapshot.get("event_id") or "")
 
         if source == "betano" and event_id:
-            meta = await self.target.event_by_id(event_id)
-            if meta:
-                return meta
+            # acha a fonte Betano na lista de alvos (self.targets é lista agora)
+            betano = next((t for t in self.targets
+                           if getattr(t, "name", "") == "betano"), None)
+            if betano and hasattr(betano, "event_by_id"):
+                meta = await betano.event_by_id(event_id)
+                if meta:
+                    return meta
 
         # caminho do DOM (Bet365 e fallback)
         home = snapshot.get("home") or ""
@@ -347,35 +369,6 @@ class ValueFinder:
                 "linhas_ofertadas": len(offered), "props_ofertados": len(props),
                 "linhas_comparadas": comparadas[0], "novas": novas}
 
-    async def cross_theoddsapi(self, events: list[dict]) -> dict:
-        """Cruza eventos da the-odds-api (Bet365 crua) contra a Pinnacle. É o
-        pull SOB DEMANDA — chamado pelo endpoint /api/pull_bet365, não pelo loop."""
-        fair_events, candidates = self._fair_index()
-        casados = 0
-        comparadas = [0]
-        novas = 0
-        near: list[dict] = []
-        for ev in events:
-            alvo = {"home": ev["home"], "away": ev["away"], "start": ev.get("start")}
-            m = matching.match_event(
-                alvo, candidates, max_minutes=config.MATCH_MAX_MINUTES,
-                min_score=config.MATCH_MIN_SCORE,
-                min_side_score=config.MATCH_MIN_SIDE_SCORE)
-            if not m:
-                continue
-            casados += 1
-            fair_event = fair_events[m["event"]["matchup_id"]]
-            opps = evaluate_event(alvo, ev["offered"], fair_event, m["score"],
-                                  near_out=near, comparadas=comparadas)
-            for o in opps:
-                if db.upsert_opportunity(o):
-                    novas += 1
-        if near:
-            near.sort(key=lambda x: -x["edge_pct"])
-            self.near_misses = (near + self.near_misses)[:25]
-        return {"eventos": len(events), "casados": casados,
-                "comparadas": comparadas[0], "novas": novas}
-
     # ---------------------------------------------------------- player props
     def _parse_props(self, snapshot: dict, meta: dict) -> list[dict]:
         """Extrai player props do snapshot (mercados cujo nome indica jogador)."""
@@ -389,7 +382,8 @@ class ValueFinder:
         if not props:
             return 0
         # referência de props do MESMO jogo (source fanduel)
-        fair_props = db.list_fair_lines(source="fanduel", limit=100_000)
+        fair_props = db.list_fair_lines(source="fanduel", limit=100_000,
+                                        stale_min=config.PROPS_FAIR_STALE_MIN)
         if not fair_props:
             return 0
         # agrupa a referência por evento sharp, e casa o evento da casa contra eles
@@ -438,6 +432,7 @@ class ValueFinder:
                 continue
             opp = {
                 "id": f"{off['book']}|prop|{me['event']['matchup_id']}|{jog}|{fair['market']}|{off['line']}|{off['side']}",
+                "matchup_id": me["event"]["matchup_id"],
                 "tab": "props", "suspicious": 1 if edge > config.EDGE_SANITY_MAX_PCT else 0,
                 "sport": fair.get("sport") or "", "league": fair.get("league") or "",
                 "event_home": meta["home"], "event_away": meta["away"],
@@ -454,6 +449,53 @@ class ValueFinder:
                 novas += 1
         return novas
 
+    async def cross_book_props(self, target, sports: list[str]) -> int:
+        """Cruza as PLAYER PROPS de uma casa (Betano) contra a referência sharp
+        de props (FanDuel). Casa o evento primeiro (barato) e só então busca as
+        props do jogo (caro) — evita puxar props de jogos que a FanDuel não
+        cobre. Reaproveita _cross_props (jogador + linha + lado)."""
+        fair_props = db.list_fair_lines(source="fanduel", limit=100_000,
+                                        stale_min=config.PROPS_FAIR_STALE_MIN)
+        if not fair_props:
+            return 0
+        by_event: dict[str, list[dict]] = {}
+        for r in fair_props:
+            by_event.setdefault(r["matchup_id"], []).append(r)
+        cand = [{"home": v[0]["event_home"], "away": v[0]["event_away"],
+                 "start": v[0]["event_date"], "matchup_id": k}
+                for k, v in by_event.items()]
+        get_listings = getattr(target, "prop_listings", None) or target.collect_listings
+        near: list[dict] = []
+        novas = 0
+        for sport in sports:
+            try:
+                listings = await get_listings(sport)
+            except Exception:
+                log.exception("erro listando jogos de props (%s)", sport)
+                continue
+            for ev in listings:
+                parts = [p.get("name") for p in (ev.get("participants") or [])]
+                if len(parts) < 2:
+                    continue
+                meta = {"home": parts[0], "away": parts[1], "start": ev.get("startTime")}
+                m = matching.match_event(
+                    meta, cand, max_minutes=config.MATCH_MAX_MINUTES,
+                    min_score=config.MATCH_MIN_SCORE,
+                    min_side_score=config.MATCH_MIN_SIDE_SCORE)
+                if not m:
+                    continue
+                try:
+                    props = await target.fetch_event_props(ev)
+                except Exception:
+                    log.exception("erro buscando props do jogo")
+                    continue
+                if props:
+                    novas += self._cross_props(props, meta, m["score"], near)
+        if near:
+            near.sort(key=lambda x: -x["edge_pct"])
+            self.near_misses = (near + self.near_misses)[:25]
+        return novas
+
     async def run(self) -> dict:
         fair_rows = db.list_fair_lines(limit=100_000)
         if not fair_rows:
@@ -466,53 +508,62 @@ class ValueFinder:
                       for mid, e in fair_events.items()]
 
         stats = defaultdict(int)
+        por_casa: dict[str, dict] = {}     # resumo da última varredura por casa
         novas = 0
         near: list[dict] = []
         comparadas = [0]      # linhas que encontraram par na referência sharp
-        for sport in config.BETANO_SPORTS:
-            listings = await self.target.collect_listings(sport)
-            stats["eventos_casa"] += len(listings)
+        for target in self.targets:
+            c = {"book": target.book, "jogos": 0, "casados": 0, "opps": 0,
+                 "erro": ""}
+            for sport in config.BETANO_SPORTS:
+                listings = await target.collect_listings(sport)
+                stats["eventos_casa"] += len(listings)
+                c["jogos"] += len(listings)
 
-            for ev in listings:
-                parts = [p.get("name") for p in (ev.get("participants") or [])]
-                if len(parts) < 2:
-                    continue
-                alvo = {"home": parts[0], "away": parts[1],
-                        "start": ev.get("startTime")}
-                m = matching.match_event(
-                    alvo, candidates,
-                    max_minutes=config.MATCH_MAX_MINUTES,
-                    min_score=config.MATCH_MIN_SCORE,
-                    min_side_score=config.MATCH_MIN_SIDE_SCORE)
-                if not m:
-                    stats["sem_casamento"] += 1
-                    continue
-                stats["casados"] += 1
-                fair_event = fair_events[m["event"]["matchup_id"]]
+                for ev in listings:
+                    parts = [p.get("name") for p in (ev.get("participants") or [])]
+                    if len(parts) < 2:
+                        continue
+                    alvo = {"home": parts[0], "away": parts[1],
+                            "start": ev.get("startTime")}
+                    m = matching.match_event(
+                        alvo, candidates,
+                        max_minutes=config.MATCH_MAX_MINUTES,
+                        min_score=config.MATCH_MIN_SCORE,
+                        min_side_score=config.MATCH_MIN_SIDE_SCORE)
+                    if not m:
+                        stats["sem_casamento"] += 1
+                        continue
+                    stats["casados"] += 1
+                    c["casados"] += 1
+                    fair_event = fair_events[m["event"]["matchup_id"]]
 
-                # detalhe do jogo (traz Total de Gols) — só para casados
-                try:
-                    offered = await self.target.fetch_event_lines(ev)
-                except Exception:
-                    log.exception("erro no detalhe do evento da casa")
-                    continue
-                stats["linhas_ofertadas"] += len(offered)
+                    # detalhe do jogo (traz Total de Gols) — só para casados
+                    try:
+                        offered = await target.fetch_event_lines(ev)
+                    except Exception:
+                        log.exception("erro no detalhe do evento da casa")
+                        continue
+                    stats["linhas_ofertadas"] += len(offered)
 
-                # e-sports: alimenta o consenso com a Betano de-vigada (entra na
-                # fair no próximo ciclo; edge medido fica conservador)
-                contribute_book_to_consensus(offered, fair_event, self.target.name)
+                    # e-sports: alimenta o consenso com a casa de-vigada
+                    contribute_book_to_consensus(offered, fair_event, target.name)
 
-                opps = evaluate_event(alvo, offered, fair_event, m["score"],
-                                      near_out=near, comparadas=comparadas)
-                stats["oportunidades"] += len(opps)
-                for o in opps:
-                    if db.upsert_opportunity(o):
-                        novas += 1
+                    opps = evaluate_event(alvo, offered, fair_event, m["score"],
+                                          near_out=near, comparadas=comparadas)
+                    stats["oportunidades"] += len(opps)
+                    c["opps"] += len(opps)
+                    for o in opps:
+                        if db.upsert_opportunity(o):
+                            novas += 1
 
-        db.deactivate_stale(self.target.book, config.STALE_AFTER_SEC)
+            c["erro"] = getattr(target, "last_error", "") or ""
+            por_casa[target.name] = c
+            db.deactivate_stale(target.book, config.STALE_AFTER_SEC)
         near.sort(key=lambda x: -x["edge_pct"])
         self.near_misses = near[:20]
         stats["novas"] = novas
         stats["linhas_comparadas"] = comparadas[0]
+        stats["por_casa"] = por_casa
         self.last_stats = dict(stats)
         return self.last_stats

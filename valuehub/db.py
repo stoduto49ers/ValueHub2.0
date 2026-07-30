@@ -109,6 +109,8 @@ def init():
         if "sharp_sources" not in ocols:
             con.execute("ALTER TABLE opportunities ADD COLUMN sharp_sources TEXT")
             con.execute("ALTER TABLE opportunities ADD COLUMN n_sharps INTEGER DEFAULT 1")
+        if "matchup_id" not in ocols:      # jogo canônico (Pinnacle) p/ agrupar a
+            con.execute("ALTER TABLE opportunities ADD COLUMN matchup_id TEXT")  # MESMA aposta entre casas
         bcols = [r["name"] for r in con.execute("PRAGMA table_info(bets)").fetchall()]
         if "clv_stale" not in bcols:   # 1 = fechamento aproximado (offline no kickoff)
             con.execute("ALTER TABLE bets ADD COLUMN clv_stale INTEGER DEFAULT 0")
@@ -118,6 +120,8 @@ def init():
             con.execute("ALTER TABLE bets ADD COLUMN legs_json TEXT")
         if "source_tab" not in bcols:
             con.execute("ALTER TABLE bets ADD COLUMN source_tab TEXT")
+        if "matchup_id" not in bcols:  # jogo canônico -> esconder o MESMO mercado
+            con.execute("ALTER TABLE bets ADD COLUMN matchup_id TEXT")  # em QUALQUER casa
         # backfill: duplas antigas (têm legs_ids, mas não legs_json) — reconstrói
         # os dados das pernas pelas oportunidades, se ainda existirem no banco
         for r in con.execute("SELECT id, legs_ids FROM bets WHERE "
@@ -156,15 +160,16 @@ def upsert_opportunity(o: dict) -> bool:
                  offered_odd, fair_odd, fair_prob, edge_pct, best_edge_pct,
                  min_edge_required, max_limit, direct_link, stake_units,
                  stake_amount, first_seen, last_seen, active, match_score,
-                 sharp_sources, n_sharps)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,?)
+                 sharp_sources, n_sharps, matchup_id)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,?,?)
             """, (o["id"], o["tab"], o["suspicious"], o["sport"], o["league"],
                   o["event_home"], o["event_away"], o["event_date"], o["event_id"],
                   o["market"], o["hdp"], o["side"], o["player"], o["book"],
                   o["offered_odd"], o["fair_odd"], o["fair_prob"], o["edge_pct"],
                   o["edge_pct"], o["min_edge_required"], o["max_limit"],
                   o["direct_link"], o["stake_units"], o["stake_amount"], now, now,
-                  o.get("match_score"), o.get("sharp_sources"), o.get("n_sharps", 1)))
+                  o.get("match_score"), o.get("sharp_sources"), o.get("n_sharps", 1),
+                  o.get("matchup_id")))
             return True
         best = max(row["best_edge_pct"] or 0.0, o["edge_pct"])
         con.execute("""
@@ -178,6 +183,18 @@ def upsert_opportunity(o: dict) -> bool:
               o["stake_units"], o["stake_amount"], o["suspicious"], now, 
               o.get("match_score"), o["tab"], o["id"]))
         return False
+
+
+def deactivate_all_opportunities() -> int:
+    """No START do servidor: esconde TODAS as value bets sugeridas (value +
+    esports) do processo anterior. Elas estão obsoletas — foram calculadas
+    contra linhas Pinnacle/casas que ainda não foram revarridas neste processo,
+    então na maioria estão erradas. Marca active=0 (não apaga) para preservar o
+    histórico/CLV das apostas já registradas em `bets`. O poller repovoa com
+    linhas frescas no primeiro ciclo (upsert reativa quem reaparecer)."""
+    with _lock, _con() as con:
+        cur = con.execute("UPDATE opportunities SET active=0 WHERE active=1")
+        return cur.rowcount
 
 
 def deactivate_stale(book: str, stale_after_sec: int):
@@ -303,18 +320,49 @@ def freeze_closings():
 
 
 def bet_families() -> set:
-    """Conjunto de (evento, mercado) em que JÁ HÁ aposta registrada. Serve para
-    silenciar as demais linhas do mesmo jogo+mercado (evita duplicar/superexpor).
-    'evento' é 'mandante vs visitante', igual ao gravado em bets."""
+    """Chaves dos mercados em que JÁ HÁ aposta registrada, para sumir do painel.
+    Casa por JOGO CANÔNICO (matchup_id) — assim a aposta feita numa casa esconde
+    o MESMO mercado em TODAS as casas (o nome do evento difere entre casas). O
+    jogador entra na chave (props): apostar no jogador A não esconde o B. Mantém
+    também a chave por nome do evento (fallback p/ apostas antigas sem
+    matchup_id)."""
     with _con() as con:
-        rows = con.execute("SELECT event, market FROM bets").fetchall()
-    return {(r["event"], r["market"]) for r in rows}
+        rows = con.execute("SELECT event, market, matchup_id, player FROM bets").fetchall()
+    fam = set()
+    for r in rows:
+        player = r["player"] or ""
+        if r["matchup_id"]:
+            fam.add(("m", r["matchup_id"], r["market"], player))
+        fam.add(("e", r["event"], r["market"], player))
+    return fam
 
 
 def _family(o: dict) -> tuple:
-    """Chave de correlação: mesmo jogo + mesmo mercado + mesmo lado. Todas as
-    linhas de Spread home da Chapecoense caem na mesma família."""
-    return (o["event_home"], o["event_away"], o["market"], o["side"])
+    """Chave de colapso do painel: jogo canônico + mercado + LADO (+ jogador nas
+    props). Colapsa numa linha só TANTO as várias LINHAS do mesmo mercado
+    (escadinha: -1.5, -2.5…) QUANTO as várias CASAS da mesma aposta. A linha
+    exibida é a de maior edge; as demais viram DOIS dropdowns:
+      - escadinha (list_family_lines): as outras linhas, p/ dividir a bet;
+      - casas    (list_family_books): as outras casas com valor no mesmo jogo.
+    Assim o mesmo jogo não aparece replicado e nada some.
+
+    Usa matchup_id (jogo canônico da Pinnacle) p/ juntar casas cujos nomes de
+    time diferem; sem ele (opp antiga), cai nos nomes do evento."""
+    game = o.get("matchup_id") or f"{o['event_home']}|{o['event_away']}"
+    return (game, o["market"], o["side"], o.get("player") or "")
+
+
+def _family_where(o: dict):
+    """WHERE + args que casa todas as opps ativas da MESMA família de `o`
+    (mesmo jogo + mercado + lado [+ jogador])."""
+    q = "active=1 AND market=? AND side=? AND COALESCE(player,'')=?"
+    args: list = [o["market"], o["side"], o.get("player") or ""]
+    if o.get("matchup_id"):
+        q += " AND matchup_id=?"; args.append(o["matchup_id"])
+    else:
+        q += " AND event_home=? AND event_away=?"
+        args += [o["event_home"], o["event_away"]]
+    return q, args
 
 
 def list_opportunities(tab: str = "", active_only: bool = True,
@@ -343,23 +391,39 @@ def list_opportunities(tab: str = "", active_only: bool = True,
     with _con() as con:
         rows = [dict(r) for r in con.execute(q, args).fetchall()]
 
-    # silencia jogos+mercados em que você já apostou (não superexpõe)
+    # silencia jogos+mercados em que você já apostou (mesmo em OUTRA casa) —
+    # casa por matchup_id (jogo canônico) e cai no nome do evento como fallback.
     if hide_bet:
         fam = bet_families()
-        rows = [r for r in rows
-                if (f"{r['event_home']} vs {r['event_away']}", r["market"]) not in fam]
 
-    # colapsa linhas correlacionadas: 1 por (jogo, mercado, lado) — a de maior
-    # edge — e conta quantas outras existem (para o painel mostrar "+N linhas")
+        def ja_apostado(r: dict) -> bool:
+            player = r.get("player") or ""
+            mid = r.get("matchup_id")
+            if mid and ("m", mid, r["market"], player) in fam:
+                return True
+            ev = f"{r['event_home']} vs {r['event_away']}"
+            return ("e", ev, r["market"], player) in fam
+
+        rows = [r for r in rows if not ja_apostado(r)]
+
+    # colapsa por (jogo, mercado, lado): 1 linha — a de maior edge — e conta
+    # quantas LINHAS distintas (escadinha) e quantas CASAS há na família, p/ o
+    # painel oferecer os dois dropdowns.
     if collapse:
         best: dict = {}
+        lines_seen: dict = {}
+        books_seen: dict = {}
         for r in rows:
             k = _family(r)
+            lines_seen.setdefault(k, set()).add(
+                round(r["hdp"], 2) if r["hdp"] is not None else None)
+            books_seen.setdefault(k, set()).add(r["book"])
             if k not in best:
-                r["family_count"] = 1
                 best[k] = r
-            else:
-                best[k]["family_count"] += 1
+        for k, r in best.items():
+            r["lines_count"] = len(lines_seen[k])
+            r["books_count"] = len(books_seen[k])
+            r["family_count"] = len(lines_seen[k])   # compat: escadinha
         rows = sorted(best.values(), key=lambda x: -x["edge_pct"])
 
     return rows[:limit]
@@ -371,21 +435,51 @@ def get_opportunity(opp_id: str) -> dict | None:
         return dict(row) if row else None
 
 
-def list_family(opp_id: str) -> list[dict]:
-    """Todas as linhas ATIVAS correlacionadas à oportunidade (mesmo jogo +
-    mercado + lado), da maior para a menor edge. É o que o painel mostra ao
-    expandir '+N linhas correlacionadas' — para escolher uma linha alternativa
-    (ex.: outra do handicap) mesmo com edge levemente menor."""
+def list_family_lines(opp_id: str) -> list[dict]:
+    """ESCADINHA: as LINHAS ativas do mesmo jogo+mercado+lado (ex.: Spread -1.5,
+    -2.5), da maior p/ menor edge. Uma entrada por LINHA (a melhor casa daquela
+    linha). É o dropdown para dividir a aposta em várias linhas (dutching)."""
     o = get_opportunity(opp_id)
     if not o:
         return []
+    where, args = _family_where(o)
     with _con() as con:
-        rows = con.execute("""
-            SELECT * FROM opportunities
-            WHERE active=1 AND event_home=? AND event_away=? AND market=? AND side=?
-            ORDER BY edge_pct DESC
-        """, (o["event_home"], o["event_away"], o["market"], o["side"])).fetchall()
-    return [dict(r) for r in rows]
+        rows = [dict(r) for r in con.execute(
+            f"SELECT * FROM opportunities WHERE {where} ORDER BY edge_pct DESC",
+            args).fetchall()]
+    seen, out = set(), []                   # uma por LINHA (a de maior edge)
+    for r in rows:
+        ln = round(r["hdp"], 2) if r["hdp"] is not None else None
+        if ln in seen:
+            continue
+        seen.add(ln)
+        out.append(r)
+    return out
+
+
+def list_family_books(opp_id: str) -> list[dict]:
+    """CASAS: as casas ativas que têm valor no mesmo jogo+mercado+lado, da maior
+    p/ menor edge. Uma entrada por CASA (a melhor linha daquela casa). É o
+    dropdown para escolher onde apostar se a indicada estiver sem saldo."""
+    o = get_opportunity(opp_id)
+    if not o:
+        return []
+    where, args = _family_where(o)
+    with _con() as con:
+        rows = [dict(r) for r in con.execute(
+            f"SELECT * FROM opportunities WHERE {where} ORDER BY edge_pct DESC",
+            args).fetchall()]
+    seen, out = set(), []                   # uma por CASA (a de maior edge)
+    for r in rows:
+        if r["book"] in seen:
+            continue
+        seen.add(r["book"])
+        out.append(r)
+    return out
+
+
+# compat: nome antigo (escadinha)
+list_family = list_family_lines
 
 
 def purge_old(days: int = 7):
@@ -431,16 +525,19 @@ def upsert_fair_lines(lines: list[dict]) -> int:
 
 def list_fair_lines(sport: str = "", market: str = "", search: str = "",
                     source: str = "", is_prop: bool | None = None,
-                    active_only: bool = True,
+                    active_only: bool = True, stale_min: int = 15,
                     limit: int = 500) -> list[dict]:
     q = "SELECT * FROM fair_lines WHERE 1=1"
     args: list = []
-    
+
     if active_only:
         from datetime import datetime, timezone, timedelta
         now = datetime.now(timezone.utc)
         now_str = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-        stale_threshold = (now - timedelta(minutes=15)).isoformat()
+        # janela de frescor (padrão 15min p/ odds regulares). Props usam janela
+        # maior: a linha da FanDuel muda pouco pré-jogo e a varredura pode estar
+        # em rate limit — melhor comparar contra a última linha do que nada.
+        stale_threshold = (now - timedelta(minutes=stale_min)).isoformat()
         q += " AND event_date > ? AND updated_at > ?"
         args.extend([now_str, stale_threshold])
         
@@ -494,13 +591,14 @@ def register_bet(opp: dict, stake_units: float, stake_amount: float,
             INSERT INTO bets (opportunity_id, ts_placed, event, event_date,
                 sport, league, market, hdp, selection, player, book,
                 fair_odd, odd_taken, edge_pct, stake_units, stake_amount,
-                source_tab)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                source_tab, matchup_id)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (opp["id"], utcnow(),
               f"{opp['event_home']} vs {opp['event_away']}", opp["event_date"],
               opp["sport"], opp["league"], opp["market"], opp["hdp"],
               opp["side"], opp["player"], opp["book"], opp["fair_odd"],
-              odd_taken, opp["edge_pct"], stake_units, stake_amount, opp.get("tab", "")))
+              odd_taken, opp["edge_pct"], stake_units, stake_amount,
+              opp.get("tab", ""), opp.get("matchup_id")))
         return cur.lastrowid
 
 
