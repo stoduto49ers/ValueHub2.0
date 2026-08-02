@@ -284,12 +284,17 @@ def get_bets(pending: int = 0):
 
 
 @app.get("/bets.csv")
-def bets_csv():
-    """Exporta as apostas em CSV para você planilhar/backtestar."""
+def bets_csv(sport: str = "", tab: str = ""):
+    """Exporta as apostas em CSV para você planilhar/backtestar. `sport`/`tab`
+    exportam SÓ o recorte selecionado (bate com a tabela e os cards)."""
     import csv
     import io as _io
     from fastapi.responses import Response
     rows = db.list_bets()
+    if sport:
+        rows = [r for r in rows if r.get("sport") == sport]
+    if tab:
+        rows = [r for r in rows if r.get("source_tab") == tab]
     cols = ["id", "ts_placed", "event", "event_date", "sport", "league",
             "market", "hdp", "selection", "player", "book", "fair_odd",
             "odd_taken", "edge_pct", "stake_units", "stake_amount",
@@ -304,8 +309,10 @@ def bets_csv():
 
 
 @app.get("/summary")
-def get_summary():
-    return db.bets_summary()
+def get_summary(sport: str = "", tab: str = ""):
+    """Resumo dos ganhos. `sport`/`tab` isolam o esporte/origem (batem com o
+    filtro da tabela de apostas)."""
+    return db.bets_summary(sport=sport, tab=tab)
 
 
 # ------------------------------------------------- extensão (contrato v1)

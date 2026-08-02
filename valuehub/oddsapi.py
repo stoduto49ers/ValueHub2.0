@@ -67,5 +67,51 @@ class OddsApiClient:
         self.last_error = f"HTTP {r.status_code}"
         return None
 
+    async def _get_json(self, path: str, params: dict):
+        """GET genérico com a mesma disciplina de erro/backoff do value_bets.
+        Devolve o JSON decodificado ou None."""
+        if not config.API_KEY:
+            self.last_error = "ODDS_API_KEY não configurada (crie o arquivo .env)"
+            return None
+        if time.time() < self.backoff_until:
+            return None
+        p = dict(params or {})
+        p["apiKey"] = config.API_KEY
+        try:
+            r = await self.http.get(path, params=p)
+        except httpx.HTTPError as e:
+            self.last_error = f"rede: {e.__class__.__name__}"
+            return None
+        self.requests_made += 1
+        self.ratelimit_remaining = r.headers.get("x-ratelimit-remaining", "")
+        if r.status_code == 200:
+            self.last_error = ""
+            try:
+                return r.json()
+            except ValueError:
+                self.last_error = "resposta não-JSON"
+                return None
+        if r.status_code == 429:
+            self.backoff_until = time.time() + config.BACKOFF_ON_429_SEC
+            self.last_error = f"rate limit (429) — pausa de {config.BACKOFF_ON_429_SEC}s"
+            return None
+        if r.status_code == 401:
+            self.last_error = "chave inválida (401) — confira ODDS_API_KEY"
+            return None
+        self.last_error = f"HTTP {r.status_code}"
+        return None
+
+    async def events(self, sport_slug: str) -> list[dict] | None:
+        """Lista de eventos de um esporte (/events?sport=slug)."""
+        data = await self._get_json("/events", {"sport": sport_slug})
+        return data if isinstance(data, list) else ([] if data == [] else None)
+
+    async def event_odds(self, event_id, bookmaker: str) -> dict | None:
+        """Odds COMPLETAS de um evento numa casa (/odds?eventId&bookmakers=).
+        É por aqui que vem o catálogo inteiro de player props do FanDuel."""
+        data = await self._get_json("/odds", {"eventId": event_id,
+                                              "bookmakers": bookmaker})
+        return data if isinstance(data, dict) else None
+
     async def close(self):
         await self.http.aclose()

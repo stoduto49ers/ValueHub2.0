@@ -45,13 +45,18 @@ _SPORT_IDS = {"futebol": 66, "basquete": 67, "beisebol": 76, "esports": 145,
 # whitelist de MarketTypeId do JOGO INTEIRO -> mercado canônico. São universais
 # na Altenar (um typeId = o mesmo mercado em todos os esportes), então incluir
 # os do tênis não colide com os das outras modalidades.
-#   Tênis: 186 Vencedor · 189 Total de jogos. NÃO incluímos o handicap do tênis:
-#   o 187 é handicap de GAMES e o 188 de SETS, mas a Pinnacle marca ambos como
-#   "Spread" com a mesma linha (±1.5) — casaria games contra sets e daria edge
-#   falso. ML (sem linha) e Total de games (mesma unidade) são inequívocos.
+#   Tênis: 186 Vencedor · 188 Handicap de SETS · 196 Número de sets (2/3) ·
+#   189 Total de GAMES · 187 Handicap de GAMES. A Pinnacle cobre SETS no jogo,
+#   então casamos 188 (Set Handicap) e 196 (Total Sets) com nomes EXPLÍCITOS.
+#   Os de GAMES (187/189) e os POR SET (203/204...) ganham nome próprio ou são
+#   descartados — nunca casam contra o de sets (defende a armadilha ±1.5).
 _ML_TYPES = {1, 219, 251, 30001, 186}
 _SPREAD_TYPES = {16, 223, 256, 327}
-_TOTALS_TYPES = {18, 225, 258, 328, 189}
+_TOTALS_TYPES = {18, 225, 258, 328}
+# --- tênis: tipos específicos (typeId universal na Altenar) ---
+_SET_HCP_TYPES = {188}       # Handicap de sets -> Set Handicap (Pinnacle s;0;s;±1.5)
+_TOTAL_SETS_TYPES = {196}    # Número exato de sets (2/3) -> Total Sets (s;0;ou;2.5)
+_TOTAL_GAMES_TYPES = {189}   # Total de games do jogo (sem referência sharp)
 
 _DRAW_WORDS = {"empate", "draw", "x", "tie"}
 # número assinado dentro de parênteses no fim do nome: 'Juventude (+0.5)'
@@ -100,7 +105,7 @@ def _side_line(canon: str, name: str, odd: dict, hn: str, an: str):
             return "draw", None
         return None, None
 
-    if canon == "Totals":
+    if canon in ("Totals", "Total Games"):
         low = name.lower()
         if "mais" in low or "over" in low or "acima" in low:
             side = "over"
@@ -113,7 +118,7 @@ def _side_line(canon: str, name: str, odd: dict, hn: str, an: str):
             line = _f(m.group(1))
         return (side, line) if line is not None else (None, None)
 
-    if canon == "Spread":
+    if canon in ("Spread", "Set Handicap"):
         # a linha assinada de CADA lado está no parêntese do nome: 'Time (-1.5)'
         m = _PAREN_NUM.search(name)
         line = _f(m.group(1)) if m else None
@@ -132,11 +137,39 @@ def _classify(mkt: dict) -> str | None:
     tid = int(mkt.get("MarketTypeId") or 0)
     if tid in _ML_TYPES:
         return "ML"
+    if tid in _SET_HCP_TYPES:
+        return "Set Handicap"
+    if tid in _TOTAL_SETS_TYPES:
+        return "Total Sets"
+    if tid in _TOTAL_GAMES_TYPES:
+        return "Total Games"
     if tid in _SPREAD_TYPES:
         return "Spread"
     if tid in _TOTALS_TYPES:
         return "Totals"
     return None
+
+
+def _parse_total_sets(mkt: dict) -> list[tuple[str, float, float]]:
+    """typeId 196 'Número exato de sets': 2/3 -> Total de Sets over/under 2.5.
+    Só melhor-de-3 (opções exatamente {2,3}); senão não arrisca (retorna [])."""
+    items = mkt.get("Items") or []
+    nomes = {str(o.get("Name") or "").strip() for o in items}
+    if nomes != {"2", "3"}:
+        return []
+    out = []
+    for o in items:
+        if o.get("IsActive") is False:
+            continue
+        price = _f(o.get("Price"))
+        if not price or price <= 1.0:
+            continue
+        nm = str(o.get("Name") or "").strip()
+        if nm == "2":
+            out.append(("under", price, 2.5))
+        elif nm == "3":
+            out.append(("over", price, 2.5))
+    return out
 
 
 def parse_event_details(res: dict) -> list[dict]:
@@ -159,6 +192,22 @@ def parse_event_details(res: dict) -> list[dict]:
         for mkt in (g.get("Items") or []):
             canon = _classify(mkt)
             if not canon:
+                continue
+            # Total de Sets (196): trata o mercado inteiro de uma vez (precisa
+            # ver todas as opções p/ confirmar melhor-de-3 antes de emitir).
+            if canon == "Total Sets":
+                for side, price, line in _parse_total_sets(mkt):
+                    key = ("Total Sets", round(line, 2), side)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    out.append({
+                        "market": "Total Sets", "line": line, "side": side, "odd": price,
+                        "source": "estrelabet", "book": "EstrelaBet",
+                        "event_home": home, "event_away": away, "event_id": ev_id,
+                        "event_date": start, "league": league,
+                        "url": config.ESTRELABET_BASE,
+                    })
                 continue
             for o in (mkt.get("Items") or []):
                 if o.get("IsActive") is False:

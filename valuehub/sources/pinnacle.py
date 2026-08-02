@@ -125,6 +125,16 @@ def extract_fair_lines(matchup: dict, markets: list[dict],
 
         limit = _max_limit(mk)
         market_name = _market_name(mtype, mk.get("period"), prefix)
+        # TÊNIS: no jogo (period 0), o total da Pinnacle é de SETS (linha 2.5) e o
+        # spread é handicap de SETS (±1.5) — NÃO de games. Renomeamos para nomes
+        # explícitos ('Total Sets' / 'Set Handicap') para que uma linha genérica
+        # de GAMES de uma casa (mesma linha ±1.5) NÃO case por engano com o de
+        # sets. Só o mercado de set explícito da casa casa com estes.
+        if sport == "Tennis" and mk.get("period") == 0 and not prefix:
+            if mtype == "total":
+                market_name = "Total Sets"
+            elif mtype == "spread":
+                market_name = "Set Handicap"
 
         for (side, price), raw_odd, fair_prob in zip(picked, decimals, fair_probs):
             if not (0.0 < fair_prob < 1.0):

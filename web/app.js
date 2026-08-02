@@ -539,7 +539,15 @@ function statCard(label, value, cls = "") {
 }
 
 async function refreshBets() {
-  const [sum, bets] = await Promise.all([jget("/summary"), jget("/bets")]);
+  // lê os filtros ANTES: o resumo (cards) tem que ser calculado sobre o MESMO
+  // recorte da tabela, senão os ganhos isolados por esporte/origem não aparecem.
+  const fSport = $("bSport") ? $("bSport").value : "";
+  const fTab = $("bTab") ? $("bTab").value : "";
+  const qs = new URLSearchParams();
+  if (fSport) qs.set("sport", fSport);
+  if (fTab) qs.set("tab", fTab);
+  const sumUrl = "/summary" + (qs.toString() ? "?" + qs.toString() : "");
+  const [sum, bets] = await Promise.all([jget(sumUrl), jget("/bets")]);
   const s = sum;
   $("summaryCards").innerHTML =
     statCard("ROI", fmtPct(s.roi_pct), s.roi_pct >= 0 ? "pos" : "neg") +
@@ -551,13 +559,11 @@ async function refreshBets() {
     statCard("Apostas", `${s.settled}/${s.total_bets}`) +
     statCard("Acerto", `${s.win_rate}%`) +
     statCard("Edge médio", s.avg_edge_pct == null ? "—" : `${s.avg_edge_pct}%`) +
-    `<div class="cardstat"><a class="act link" href="/bets.csv" download
+    `<div class="cardstat"><a class="act link" href="/bets.csv${qs.toString() ? "?" + qs.toString() : ""}" download
        style="display:inline-block">⬇ Exportar CSV</a>
        <div class="l">para planilhar</div></div>`;
 
   let rows = bets.rows;
-  const fSport = $("bSport") ? $("bSport").value : "";
-  const fTab = $("bTab") ? $("bTab").value : "";
   if (fSport) rows = rows.filter((r) => r.sport === fSport);
   if (fTab) rows = rows.filter((r) => r.source_tab === fTab);
   $("betEmpty").hidden = rows.length > 0;

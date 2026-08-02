@@ -23,9 +23,10 @@ from .sources.betano import BetanoSource
 from .sources.estrelabet import EstrelaBetSource
 from .sources.betnacional import BetnacionalSource
 from .sources.betmgm import BetMGMSource
-from .sources.fanduel import extract_prop_fair_lines
+from .sources.fanduel import extract_prop_fair_lines, extract_prop_fair_lines_from_odds
 from .sources.pinnacle import PinnacleSource
 from .sources.polymarket import PolymarketSource
+from .sources.thunderpick import ThunderpickSource
 from .valuefinder import ValueFinder
 
 log = logging.getLogger("valuehub.poller")
@@ -40,11 +41,15 @@ class Poller:
         self.betnacional = BetnacionalSource()
         self.betmgm = BetMGMSource()
         self.polymarket = PolymarketSource()
+        self.thunderpick = ThunderpickSource()
         # BetMGM (Kambi) só entra quando o host/offering da BR estiver configurado
         # (o cluster público não serve o offering `betmgmbr`) — ver config.
         targets = [self.betano, self.estrelabet, self.betnacional]
         if config.BETMGM_ENABLED:
             targets.append(self.betmgm)
+        # Thunderpick (e-sports via Playwright) — desligada por padrão (roda browser)
+        if config.THUNDERPICK_ENABLED:
+            targets.append(self.thunderpick)
         self.finder = ValueFinder(targets)
         self.running = False
 
@@ -158,18 +163,55 @@ class Poller:
             await asyncio.sleep(config.PINNACLE_SWEEP_INTERVAL_SEC)
 
     # ------------------------------------- motor sharp de props: FanDuel
+    def _fd_wanted_events(self, events: list[dict], leagues: list[str]) -> list[dict]:
+        """Filtra os eventos de um esporte: liga coberta + pré-jogo na janela."""
+        from datetime import datetime, timezone, timedelta
+        now = datetime.now(timezone.utc)
+        limite = now + timedelta(hours=config.FANDUEL_PROPS_HORIZON_HOURS)
+        keys = [k.upper() for k in leagues]
+        out = []
+        for e in events or []:
+            lg = ((e.get("league") or {}).get("name")
+                  if isinstance(e.get("league"), dict) else e.get("league")) or ""
+            if not any(k in lg.upper() for k in keys):
+                continue
+            d = e.get("date") or ""
+            try:
+                dt = datetime.fromisoformat(str(d).replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if now <= dt <= limite:
+                out.append(e)
+        return out
+
     async def fanduel_sweep(self):
-        items = await self.client.value_bets("FanDuel")
-        if items is None:
-            return
-        props = [it for it in items
-                 if str((it.get("market") or {}).get("name", "")).startswith("Player Props")]
-        fair = extract_prop_fair_lines(props, devig=config.DEVIG_METHOD)
-        db.upsert_fair_lines(fair)
-        self.fd_props = len(fair)
+        """Puxa o CATÁLOGO de player props do FanDuel por evento (/odds), só dos
+        jogos pré-jogo das ligas cobertas, e grava como fair lines sharp de props.
+        Substitui o /value-bets (que quase nunca trazia props)."""
+        total_fair = 0
+        eventos = 0
+        for slug, leagues in config.FANDUEL_PROPS_LEAGUES.items():
+            evs = await self.client.events(slug)
+            if not evs:
+                continue
+            for e in self._fd_wanted_events(evs, leagues):
+                if eventos >= config.FANDUEL_PROPS_MAX_EVENTS:
+                    break
+                od = await self.client.event_odds(e.get("id"), "FanDuel")
+                await asyncio.sleep(config.FANDUEL_REQUEST_DELAY)
+                if not od:
+                    continue
+                fair = extract_prop_fair_lines_from_odds(od, devig=config.DEVIG_METHOD)
+                if fair:
+                    db.upsert_fair_lines(fair)
+                    total_fair += len(fair)
+                eventos += 1
+            if eventos >= config.FANDUEL_PROPS_MAX_EVENTS:
+                break
+        self.fd_props = total_fair
         self.fd_sweeps += 1
         self.fd_last_at = time.time()
-        log.info("fanduel props: %d linhas justas de %d props", len(fair), len(props))
+        log.info("fanduel props: %d linhas justas de %d jogos", total_fair, eventos)
 
     async def run_fanduel(self):
         while self.running:

@@ -14,3 +14,4 @@ from .estrelabet import EstrelaBetSource
 from .betnacional import BetnacionalSource
 from .pinnacle import PinnacleSource
 from .polymarket import PolymarketSource
+from .thunderpick import ThunderpickSource

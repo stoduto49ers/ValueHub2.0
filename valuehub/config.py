@@ -314,7 +314,23 @@ PINNACLE_INCLUDE_ALTERNATES = True
 # americanos; de-vigamos a linha dele para NBA/NFL/NHL/MLB/WNBA.
 # ----------------------------------------------------------------------------
 FANDUEL_PROPS_ENABLED = True
-FANDUEL_SWEEP_INTERVAL_SEC = 120
+# ANTES: props saíam de /value-bets (só devolvia props onde o FanDuel ESTAVA
+# flagado como value bet -> ~0-1 prop por ciclo, nunca MLB). AGORA puxamos o
+# catálogo COMPLETO de props do FanDuel por evento em /odds?eventId&bookmakers=
+# FanDuel (ex.: 252 props num só jogo de MLB), de-vigamos e viram a referência
+# sharp. Buscamos só os jogos PRÉ-JOGO das ligas cobertas, na janela e com teto.
+FANDUEL_SWEEP_INTERVAL_SEC = 300
+# esporte (slug da odds-api) -> palavras que identificam a liga no nome do evento.
+# Só esses jogos entram (evita puxar odds de 800 jogos de beisebol do mundo todo).
+FANDUEL_PROPS_LEAGUES = {
+    "baseball": ["MLB"],
+    "basketball": ["WNBA", "NBA"],
+    "ice-hockey": ["NHL"],
+    "american-football": ["NFL"],
+}
+FANDUEL_PROPS_HORIZON_HOURS = 48   # só jogos que começam nesta janela
+FANDUEL_PROPS_MAX_EVENTS = 40      # teto de jogos por varredura (orçamento de req)
+FANDUEL_REQUEST_DELAY = 0.3        # pausa entre chamadas /odds
 
 # ----------------------------------------------------------------------------
 # CASAS-ALVO (onde apostamos) — raspagem própria, sem login
@@ -324,6 +340,37 @@ BETANO_BASE = "https://www.betano.bet.br"
 
 ESTRELABET_ENABLED = True
 ESTRELABET_BASE = "https://estrelabet.com"
+
+# ----------------------------------------------------------------------------
+# THUNDERPICK (casa-alvo de E-SPORTS via Playwright)
+# A Thunderpick é uma SPA atrás de Cloudflare: a lista de jogos e as odds só
+# saem por WebSocket (SignalR em wss://thunderpick.io/ws/websockets). Um Chromium
+# headless abre as páginas de e-sports (passa o Cloudflare + a SPA enumera os
+# jogos) e interceptamos os frames `matchesShown` (jogos) e `marketsShown`
+# (mercados). As odds vêm em DECIMAL. Entra no consenso de e-sports e como alvo.
+#
+# DESLIGADO por padrão: roda um navegador em segundo plano (custo de recursos),
+# igual ao BETANO_DEEP. Ligue quando quiser a Thunderpick no painel.
+THUNDERPICK_ENABLED = False
+# ATENÇÃO (mesma lição do BETANO_DEEP): em HEADLESS a SPA da Thunderpick NÃO
+# hidrata a lista de CS2/LoL/Dota de forma confiável — o browser só recebe os
+# e-sports VIRTUAIS em destaque (eFootball 24/7). Com JANELA VISÍVEL a lista
+# real carrega. Por isso o padrão é headless=False (a janela abre e fecha
+# sozinha no ciclo, sem exigir interação). Valide na sua máquina antes de ligar.
+THUNDERPICK_HEADLESS = False           # True não carrega a lista real (só virtuais)
+THUNDERPICK_SWEEP_INTERVAL_SEC = 200   # varre no máx. 1x por este intervalo
+THUNDERPICK_PAGE_WAIT_SEC = 7          # espera o WS carregar por página
+# gameId da Thunderpick -> esporte (só os que a Pinnacle/Betano também cobrem,
+# p/ casar). Descobertos por sondagem do /api/betting-events/live-counts/esport.
+THUNDERPICK_GAMES = {6: "CS2", 3: "LoL", 4: "Dota 2", 20: "Valorant"}
+# páginas a abrir (uma por jogo). O gameId real vem do próprio frame; a página
+# só serve p/ a SPA assinar os jogos daquele e-sport.
+THUNDERPICK_PAGES = [
+    "https://thunderpick.io/esports/counter-strike",
+    "https://thunderpick.io/esports/league-of-legends",
+    "https://thunderpick.io/esports/dota-2",
+    "https://thunderpick.io/esports/valorant",
+]
 
 BETNACIONAL_ENABLED = True
 BETNACIONAL_BASE = "https://betnacional.com"

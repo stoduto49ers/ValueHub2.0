@@ -23,6 +23,9 @@ from datetime import datetime, timezone
 from .. import config, core
 
 _PROP_RE = re.compile(r"Player Props?\s*-\s*(?P<player>.+?)\s*\((?P<stat>[^)]+)\)\s*$", re.I)
+# rótulo da seleção no endpoint /odds: 'Will Warren (Total Strikeouts)'
+# (sem o prefixo 'Player Props - ', que só existe no /value-bets)
+_LABEL_RE = re.compile(r"^(?P<player>.+?)\s*\((?P<stat>[^)]+)\)\s*$")
 
 
 def _f(x):
@@ -39,6 +42,81 @@ def parse_prop(market_name: str) -> tuple[str, str] | None:
     if not m:
         return None
     return m.group("player").strip(), m.group("stat").strip()
+
+
+def parse_prop_label(label: str) -> tuple[str, str] | None:
+    """'Will Warren (Total Strikeouts)' -> ('Will Warren', 'Total Strikeouts')."""
+    m = _LABEL_RE.search(label or "")
+    if not m:
+        return None
+    return m.group("player").strip(), m.group("stat").strip()
+
+
+def extract_prop_fair_lines_from_odds(od: dict, devig: str = "shin") -> list[dict]:
+    """Converte a resposta de /odds?eventId&bookmakers=FanDuel em fair lines de
+    player props. É o CATÁLOGO COMPLETO do FanDuel para o jogo (não o filtrado
+    de /value-bets). Só entram props com over E under válidos (senão não há como
+    de-vigar). Função PURA (sem rede), espelha o schema de extract_prop_fair_lines.
+
+    Estrutura esperada:
+      od['bookmakers']['FanDuel'] = [ {name, odds:[...]}, ... ]
+      mercado 'Player Props' -> odds:[ {label:'Nome (Stat)', hdp, over, under}, ...]
+    """
+    ev = od or {}
+    home = ev.get("home") or ""
+    away = ev.get("away") or ""
+    sport = (ev.get("sport") or {}).get("name") if isinstance(ev.get("sport"), dict) else (ev.get("sport") or "")
+    league = (ev.get("league") or {}).get("name") if isinstance(ev.get("league"), dict) else (ev.get("league") or "")
+    date = ev.get("date") or ""
+    eid = ev.get("id")
+    fd = (ev.get("bookmakers") or {}).get("FanDuel") or []
+    sels: list[dict] = []
+    for m in fd:
+        if str(m.get("name") or "").startswith("Player Props"):
+            sels.extend(m.get("odds") or [])
+
+    out: list[dict] = []
+    now = datetime.now(timezone.utc).isoformat()
+    matchup_id = f"fd-{eid}"
+    for s in sels:
+        info = parse_prop_label(s.get("label") or "")
+        if not info:
+            continue
+        player, stat = info
+        over = _f(s.get("over"))
+        under = _f(s.get("under"))
+        if not over or not under:
+            continue
+        try:
+            probs = core.fair_probabilities([over, under], method=devig)
+        except (ValueError, ZeroDivisionError):
+            continue
+        line = _f(s.get("hdp"))
+        for side, raw, prob in (("over", over, probs[0]), ("under", under, probs[1])):
+            if not (0.0 < prob < 1.0):
+                continue
+            out.append({
+                "id": f"fanduel|{eid}|{player}|{stat}|{line}|{side}",
+                "source": "fanduel",
+                "sport": sport,
+                "league": league,
+                "event_home": home,
+                "event_away": away,
+                "event_date": date,
+                "matchup_id": matchup_id,
+                "market_key": f"prop|{player}|{stat}|{line}",
+                "market": f"Prop: {stat}",
+                "line": line,
+                "side": side,
+                "period": 0,
+                "player": player,
+                "raw_odd": round(raw, 4),
+                "fair_odd": round(core.prob_to_odd(prob), 4),
+                "fair_prob": round(prob, 6),
+                "max_limit": None,
+                "updated_at": now,
+            })
+    return out
 
 
 def extract_prop_fair_lines(items: list[dict], devig: str = "shin") -> list[dict]:

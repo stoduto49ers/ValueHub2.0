@@ -58,7 +58,11 @@ def _to_utc_iso(date_start) -> str | None:
         return s
 
 # nosso nome de esporte -> sport_id da NSX
-_SPORT_IDS = {"futebol": 1, "basquete": 2, "beisebol": 3, "mma": 117}
+# tênis=5: habilita a coleta de jogos de tênis. Só o Vencedor (ML, sem linha)
+# casa contra a Pinnacle — os handicaps/totais genéricos ('Spread'/'Totals') NÃO
+# casam, porque no tênis a Pinnacle usa nomes de SET ('Set Handicap'/'Total Sets')
+# e a Betnacional não expõe (aqui) os códigos de set p/ mapearmos com segurança.
+_SPORT_IDS = {"futebol": 1, "basquete": 2, "beisebol": 3, "mma": 117, "tenis": 5}
 
 # códigos de mercado (jogo inteiro)
 _ML_CODES = {"|Win-Draw-Win|", "|Match Betting 3-Way|"}

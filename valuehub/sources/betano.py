@@ -84,11 +84,18 @@ MARKET_MAP = {
     #     (Mercados de mapa/round específicos — TMPW/3642/TNXR/MXRH — ficam de fora.)
     "FAHC": ("Spread", "hcp"),            # Handicap de mapas do jogo
     "TSMF": ("Totals", "ou"),             # Total de mapas
-    # --- tênis (ATP/WTA): Vencedor (2 vias, por nome) e Total de games do jogo.
-    #     O handicap (TGHC) fica de fora: é de GAMES e a Pinnacle marca games e
-    #     sets ambos como "Spread" na mesma linha (±1.5) -> casaria errado.
+    # --- tênis (ATP/WTA). A Pinnacle cobre SETS no jogo: Total de Sets (2.5) e
+    #     Handicap de Sets (±1.5). Casamos SÓ esses, com nomes explícitos:
+    #       MSSH 'Handicap do Jogo (Set)'  -> Set Handicap  (Pinnacle s;0;s;±1.5)
+    #       NMST 'Número de sets' (2/3)    -> Total Sets     (Pinnacle s;0;ou;2.5)
+    #     Os de GAMES ficam com nome próprio ('Total Games'/'Games Handicap') —
+    #     a Pinnacle NÃO os cobre, então não casam (e não colidem com os de set).
+    #     Mercados POR SET (GHCS/FSTO/SWTO/STWN...) não entram no mapa: descartados.
     "HTOH": ("ML", "ml2"),                # Vencedor da partida
-    "FTGO": ("Totals", "ou"),             # Total de games do jogo
+    "MSSH": ("Set Handicap", "hcp"),      # Handicap do Jogo (Set) — ±1.5 de SETS
+    "NMST": ("Total Sets", "nmst"),       # Número de sets (2/3) — over/under 2.5
+    "FTGO": ("Total Games", "ou"),        # Total de games do jogo (sem ref sharp)
+    "TGHC": ("Games Handicap", "hcp"),    # Handicap de games do jogo (sem ref sharp)
 }
 
 
@@ -175,6 +182,26 @@ def _parse_hcp(sels: list[dict], home: str, away: str) -> list[tuple[str, float,
     return out
 
 
+def _parse_nmst(sels: list[dict]) -> list[tuple[str, float, float]]:
+    """'Número de sets': 2 / 3 -> Total de Sets over/under 2.5 (só melhor-de-3).
+    Se as opções não forem EXATAMENTE {2,3} (ex.: melhor-de-5 com 3/4/5), não
+    arrisca — retorna vazio. '2 sets' = under 2.5; '3 sets' = over 2.5."""
+    nomes = {str(s.get("name") or "").strip() for s in sels}
+    if nomes != {"2", "3"}:
+        return []
+    out = []
+    for s in sels:
+        odd = _f(s.get("price"))
+        if not odd or odd <= 1.0:
+            continue
+        nm = str(s.get("name") or "").strip()
+        if nm == "2":
+            out.append(("under", odd, 2.5))
+        elif nm == "3":
+            out.append(("over", odd, 2.5))
+    return out
+
+
 def parse_markets(event: dict, markets: list[dict]) -> list[dict]:
     """Converte os mercados de um evento da Betano em 'offered lines'.
 
@@ -198,6 +225,8 @@ def parse_markets(event: dict, markets: list[dict]) -> list[dict]:
             linhas = _parse_ml2(sels)
         elif forma == "hcp":
             linhas = _parse_hcp(sels, home, away)
+        elif forma == "nmst":
+            linhas = _parse_nmst(sels)
         else:
             linhas = _parse_over_under(sels)
         for side, odd, line in linhas:

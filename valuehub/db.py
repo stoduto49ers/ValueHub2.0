@@ -734,10 +734,22 @@ def list_bets(only_pending: bool = False) -> list[dict]:
         return [dict(r) for r in con.execute(q).fetchall()]
 
 
-def bets_summary() -> dict:
+def bets_summary(sport: str = "", tab: str = "") -> dict:
+    """Resumo das apostas. Com `sport`/`tab` calcula os ganhos ISOLADOS daquele
+    esporte/origem (mesmo filtro da tabela) — senão os cards não batem com as
+    linhas exibidas."""
+    where, params = [], []
+    if sport:
+        where.append("sport = ?")
+        params.append(sport)
+    if tab:
+        where.append("source_tab = ?")
+        params.append(tab)
+    clause = (" WHERE " + " AND ".join(where)) if where else ""
     with _con() as con:
         rows = [dict(r) for r in con.execute(
-            "SELECT stake_amount, stake_units, profit, clv_pct, edge_pct, result, settled FROM bets"
+            "SELECT stake_amount, stake_units, profit, clv_pct, edge_pct, result, settled "
+            "FROM bets" + clause, params
         ).fetchall()]
     settled = [r for r in rows if r["settled"] == 1]
     # resultado-base: 'win', 'half_win'... ou 'win (W+½W)' de dupla -> 1º token
